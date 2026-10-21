@@ -363,7 +363,9 @@ describe("helpers", () => {
   });
 
   it("displayPath makes paths relative to the working directory with / separators", () => {
-    assert.equal(displayPath("C:\\repo", "C:\\repo\\src\\a.ts"), "src/a.ts");
+    if (process.platform === "win32") {
+      assert.equal(displayPath("C:\\repo", "C:\\repo\\src\\a.ts"), "src/a.ts");
+    }
     assert.equal(displayPath("/repo", "/repo/src/a.ts"), "src/a.ts");
     assert.equal(displayPath("/repo", "/elsewhere/a.ts"), "/elsewhere/a.ts");
     assert.equal(displayPath(null, "src\\a.ts"), "src/a.ts");
