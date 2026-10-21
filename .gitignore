@@ -1,0 +1,29 @@
+# Claude Code - personal overrides stay local
+.claude/settings.local.json
+.claude/worktrees/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*~
+
+# Secrets and local env
+.env
+.env.*
+*.pem
+*.key
+
+# Build output and dependencies (if a docs site generator is added later)
+node_modules/
+dist/
+build/
+site/
+.cache/
