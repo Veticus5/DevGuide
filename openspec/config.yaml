@@ -1,0 +1,63 @@
+schema: spec-driven
+
+context: |
+  Language: pl
+  All artifacts must be written in pl.
+  Keep OpenSpec structural headings and SHALL/MUST keywords in English.
+
+  Projekt: DevGuide - toolset, który pozwala deweloperowi rozumieć i kontrolować
+  pracę agenta AI (Claude Code) nad kodem. Pełny plan i zasady: docs/devguide-plan.md.
+  Czytaj ten plik przed każdą propozycją; zmiany mają odpowiadać jego etapom.
+
+  Stan: koncepcja i makiety plus szkielet repozytorium (stack, katalogi,
+  sprawdzenia). Nie istnieje jeszcze integracja z agentem, zapis zdarzeń
+  ani podgląd. Nie zakładaj, że cokolwiek działa, dopóki nie zostało
+  zaimplementowane i sprawdzone w tym repo.
+
+  Stack (docs/stack.md): Node.js 24 + TypeScript uruchamiany natywnie bez
+  budowania, testy w node:test (*.test.ts obok kodu), jeden package.json.
+  Katalogi: agent/ (integracja z Claude Code), process/ (lokalny proces),
+  ui/ (podgląd), demo/ (projekt demonstracyjny), scripts/ (sprawdzenia).
+  Polecenie sprawdzające: `npm run check` (check:types, check:test,
+  check:links, check:specs); to samo uruchamia CI. Każda zmiana ma
+  przechodzić `npm run check` przed zakończeniem.
+
+  Zakres pierwszej wersji: jeden użytkownik, jedno zadanie, jedno repozytorium,
+  Claude Code. Bez kont, chmury, zespołów i wielu agentów.
+
+  Zasady, które obowiązują w każdej zmianie:
+  - prosty język w interfejsie; identyfikatory techniczne tylko w szczegółach;
+  - obserwacje narzędzi oddzielone od interpretacji AI;
+  - wyniki sprawdzeń powiązane z konkretną wersją kodu;
+  - historia błędnych hipotez zachowana, nie nadpisywana;
+  - status "sprawdzone" wymaga zarejestrowanego wykonania i wyniku;
+  - symulowana blokada nigdy nie jest przedstawiana jako realna kontrola;
+  - brak zależności od firmowego QA lub konkretnego systemu testów.
+
+  Faktyczne możliwości integracji Claude Code (zweryfikowane w dokumentacji,
+  2026-10): hooki w .claude/settings.json (PreToolUse, PostToolUse, Stop,
+  SessionStart, SessionEnd itd.) dostają JSON na stdin i mogą blokować
+  wywołanie narzędzia (exit 2 lub permissionDecision: deny); skille w
+  .claude/skills/<name>/SKILL.md uruchamiane przez /<name>; wznawianie sesji
+  przez `claude --resume <id>`. Każdą zmianę opierającą się na integracji
+  potwierdź małym eksperymentem, nie na opisie makiety.
+
+rules:
+  proposal:
+    - Wskaż etap planu (docs/devguide-plan.md), który realizuje zmiana.
+    - Zawsze podaj, co jest poza zakresem.
+    - Jedna zmiana = jeden działający przyrost, który da się sprawdzić.
+  tasks:
+    - Każde zadanie ma mieć sprawdzalny wynik (plik, polecenie, zachowanie).
+    - "Ostatnie zadanie to zawsze: jak ręcznie zweryfikować przyrost."
+  specs:
+    - Wymagania opisuj zachowaniem widocznym dla użytkownika, nie implementacją.
+
+operations:
+  apply:
+    guidance:
+      - Pracuj małymi przyrostami; po każdym uruchom dostępne sprawdzenia.
+      - Nie oznaczaj zadania jako wykonanego bez faktycznego uruchomienia sprawdzenia.
+  archive:
+    guidance:
+      - "Podsumuj: co działa, jak to sprawdzono, jakie są ograniczenia, następny krok."

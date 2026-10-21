@@ -30,7 +30,10 @@
       "Bash(wc *)",
       "Bash(find *)",
       "Bash(tree *)",
+      "Bash(openspec)",
+      "Bash(openspec *)",
       "Edit(docs/**)",
+      "Edit(openspec/**)",
       "Edit(*.md)",
       "Edit(.claude/**)"
     ],
