@@ -9,8 +9,10 @@ context: |
   pracę agenta AI (Claude Code) nad kodem. Pełny plan i zasady: docs/devguide-plan.md.
   Czytaj ten plik przed każdą propozycją; zmiany mają odpowiadać jego etapom.
 
-  Stan: koncepcja i makiety plus szkielet repozytorium (stack, katalogi,
-  sprawdzenia). Nie istnieje jeszcze integracja z agentem, zapis zdarzeń
+  Stan: szkielet repozytorium (stack, katalogi, sprawdzenia) oraz potwierdzona
+  eksperymentem integracja z Claude Code (Etap 2): hook zapisujący zdarzenia
+  narzędzi do lokalnego dziennika, blokada PreToolUse, minimalny skill
+  /devguide, wznawianie sesji. Nie istnieje jeszcze docelowy format zdarzeń
   ani podgląd. Nie zakładaj, że cokolwiek działa, dopóki nie zostało
   zaimplementowane i sprawdzone w tym repo.
 
@@ -34,13 +36,11 @@ context: |
   - symulowana blokada nigdy nie jest przedstawiana jako realna kontrola;
   - brak zależności od firmowego QA lub konkretnego systemu testów.
 
-  Faktyczne możliwości integracji Claude Code (zweryfikowane w dokumentacji,
-  2026-10): hooki w .claude/settings.json (PreToolUse, PostToolUse, Stop,
-  SessionStart, SessionEnd itd.) dostają JSON na stdin i mogą blokować
-  wywołanie narzędzia (exit 2 lub permissionDecision: deny); skille w
-  .claude/skills/<name>/SKILL.md uruchamiane przez /<name>; wznawianie sesji
-  przez `claude --resume <id>`. Każdą zmianę opierającą się na integracji
-  potwierdź małym eksperymentem, nie na opisie makiety.
+  Faktyczne możliwości integracji Claude Code, potwierdzone eksperymentem
+  (`npm run experiment`, Claude Code 2.1.300, 2026-10-21), wraz z kształtem
+  danych z hooków i ograniczeniami: docs/claude-code-integration.md. Opieraj
+  kolejne etapy na tym dokumencie. Każdą zmianę dotykającą integracji
+  potwierdzaj ponownym uruchomieniem eksperymentu, nie opisem makiety.
 
 rules:
   proposal:

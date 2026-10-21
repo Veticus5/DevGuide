@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "node", "args": ["agent/hooks/record-event.ts"] }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "node", "args": ["agent/hooks/record-event.ts"] }] }
+    ],
+    "PreToolUse": [
+      { "hooks": [{ "type": "command", "command": "node", "args": ["agent/hooks/record-event.ts"] }] }
+    ],
+    "PostToolUse": [
+      { "hooks": [{ "type": "command", "command": "node", "args": ["agent/hooks/record-event.ts"] }] }
+    ],
+    "PostToolUseFailure": [
+      { "hooks": [{ "type": "command", "command": "node", "args": ["agent/hooks/record-event.ts"] }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "node", "args": ["agent/hooks/record-event.ts"] }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "node", "args": ["agent/hooks/record-event.ts"], "timeout": 10 }] }
+    ]
+  }
+}

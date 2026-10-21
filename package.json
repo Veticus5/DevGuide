@@ -12,7 +12,8 @@
     "check:types": "tsc --noEmit",
     "check:test": "node --test \"{agent,process,ui,demo,scripts}/**/*.test.ts\"",
     "check:links": "node scripts/check-links.ts",
-    "check:specs": "openspec validate --all"
+    "check:specs": "openspec validate --all",
+    "experiment": "node agent/experiment/run.ts"
   },
   "license": "UNLICENSED",
   "devDependencies": {

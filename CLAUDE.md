@@ -2,7 +2,7 @@
 
 DevGuide is a toolset that helps a developer understand and control the work an AI coding agent (Claude Code) does on their code. The full product plan, principles and stages are in [docs/devguide-plan.md](docs/devguide-plan.md). Read it before planning any change.
 
-Current state: concept and mockups, plus the repository scaffold (stack, project directories, checks). No agent integration, event log or preview exists yet. Do not assume any capability works until it is implemented and checked in this repository.
+Current state: repository scaffold (stack, project directories, checks) and a confirmed integration with Claude Code: hooks that record tool events to a local log, a `PreToolUse` block, a minimal `/devguide` skill and session resume, all exercised by `npm run experiment`. What was confirmed, how, and the known limits are in [docs/claude-code-integration.md](docs/claude-code-integration.md); base later stages on that file, not on the mockups. No event log format or preview exists yet. Do not assume any capability works until it is implemented and checked in this repository.
 
 ## How work is organised
 
@@ -23,14 +23,14 @@ Rules for the agent:
 
 ## Repository layout
 
-- `agent/` - integration with Claude Code: hooks, the `/devguide` skill, the user control point (stages 2, 5, 6).
+- `agent/` - integration with Claude Code: `hooks/` (the hook script and its tests), `experiment/` (hook settings for the experiment, the experiment runner), later the user control point (stages 2, 5, 6). The `/devguide` skill itself is in `.claude/skills/devguide/`.
 - `process/` - local process: event log and the server behind the preview (stages 3, 4).
 - `ui/` - local preview (stage 4).
 - `demo/` - demonstration project with a real bug for the end-to-end example (stage 7).
 - `scripts/` - project checks and helper scripts (`check-links.ts`).
 - `docs/` - plan and project documentation (`docs/devguide-plan.md` is the source of truth for scope, `docs/stack.md` explains the stack).
 - `openspec/` - specs (`specs/`), active and archived changes (`changes/`), project context (`config.yaml`).
-- `.claude/` - Claude Code configuration: shared permissions, OpenSpec commands (`commands/opsx/`) and skills (`skills/openspec-*`). Regenerate the OpenSpec files with `openspec update`, do not edit them by hand.
+- `.claude/` - Claude Code configuration: shared permissions, OpenSpec commands (`commands/opsx/`) and skills (`skills/openspec-*`), plus the project's own `skills/devguide/`. Regenerate the OpenSpec files with `openspec update`, do not edit them by hand.
 - `.github/workflows/ci.yml` - CI, runs `npm run check`.
 - `README.md` - entry point for human readers.
 
@@ -57,4 +57,5 @@ Before finishing a change confirm that:
 
 - `npm run check` passes (types, tests, relative links in Markdown, `openspec validate --all`),
 - Markdown renders (closed code fences, consistent list markers),
-- any check the change's `tasks.md` names was actually run, with its output reported.
+- any check the change's `tasks.md` names was actually run, with its output reported,
+- a change that touches the Claude Code integration (`agent/`, `.claude/skills/devguide/`) was exercised with `npm run experiment`, which needs a logged-in Claude Code and spends tokens.

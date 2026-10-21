@@ -2,7 +2,7 @@
 
 DevGuide is a toolset that lets a developer see and control what an AI coding agent does to their code: the problem being investigated, what is established versus assumed, the proposed fix, the changed code with examples, the decisions that need a human answer, and what was actually checked.
 
-Status: concept and mockups. The repository, stack and project checks are in place and features are being added one by one. See [docs/devguide-plan.md](docs/devguide-plan.md) for the product plan and stages, and [docs/stack.md](docs/stack.md) for the stack and why it was chosen.
+Status: early. The repository, stack and project checks are in place, and the integration with Claude Code (hooks, a minimal `/devguide` skill, blocking a tool call, resuming a session) is confirmed by a repeatable experiment. There is no event log or preview yet. See [docs/devguide-plan.md](docs/devguide-plan.md) for the product plan and stages, [docs/stack.md](docs/stack.md) for the stack and why it was chosen, and [docs/claude-code-integration.md](docs/claude-code-integration.md) for what the integration can and cannot do.
 
 ## Prerequisites
 
@@ -35,6 +35,16 @@ Each check can also run on its own:
 | `npm run check:specs` | OpenSpec changes and specs are valid. |
 
 The same command runs in GitHub Actions on every push to `main` and every pull request ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
+
+## Integration experiment
+
+One more command checks the integration with Claude Code end to end. It is not part of `npm run check` because it needs a logged-in Claude Code and spends tokens:
+
+```bash
+npm run experiment
+```
+
+It runs two short `claude -p` sessions with the DevGuide hooks loaded, then reports for each question of stage 2 of the plan whether the log and the disk confirm it. Details and results: [docs/claude-code-integration.md](docs/claude-code-integration.md).
 
 ## Working on the project
 

@@ -27,3 +27,6 @@ dist/
 build/
 site/
 .cache/
+
+# DevGuide local activity log (stage 2 experiment and later stages)
+.devguide/
