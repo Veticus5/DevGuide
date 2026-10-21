@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
+import type { FileChangedEvent } from "../../process/events.ts";
+import { currentTask, readEvents, startTask } from "../../process/task-log.ts";
 import {
   BLOCK_MARKER,
   handleHookInput,
@@ -16,6 +18,7 @@ import {
 } from "./record-event.ts";
 
 const SCRIPT = fileURLToPath(new URL("./record-event.ts", import.meta.url));
+const NO_VERSION = { commit: null, working_tree: null };
 
 interface RunResult {
   status: number | null;
@@ -24,13 +27,13 @@ interface RunResult {
   entries: LogEntry[];
 }
 
-/** Runs the hook as Claude Code would: JSON on stdin, log path in the environment. */
+/** Runs the hook as Claude Code would: JSON on stdin, data directory in the environment. The log is `<dir>/events.jsonl`. */
 function runHook(input: Record<string, unknown>, logFile: string, cwd: string): RunResult {
   const result = spawnSync(process.execPath, [SCRIPT], {
     cwd,
     input: JSON.stringify(input),
     encoding: "utf8",
-    env: { ...process.env, DEVGUIDE_LOG_FILE: logFile },
+    env: { ...process.env, DEVGUIDE_DIR: dirname(logFile) },
   });
   const entries = existsSync(logFile)
     ? readFileSync(logFile, "utf8")
@@ -169,7 +172,7 @@ describe("record-event hook (as a child process)", () => {
   });
 
   it("exits 0 and reports on stderr when the log cannot be written", () => {
-    // A regular file where the log directory should be makes mkdir fail.
+    // A regular file where the data directory should be makes mkdir fail.
     const blocker = join(dir, "not-a-directory");
     writeFileSync(blocker, "x");
     const run = runHook(
@@ -186,16 +189,104 @@ describe("record-event hook (as a child process)", () => {
       cwd: dir,
       input: "not json",
       encoding: "utf8",
-      env: { ...process.env, DEVGUIDE_LOG_FILE: logFile },
+      env: { ...process.env, DEVGUIDE_DIR: dirname(logFile) },
     });
     assert.equal(result.status, 0);
     assert.match(result.stderr, /could not parse/);
   });
 });
 
+describe("record-event hook and the task log", () => {
+  let dir: string;
+  let dataDir: string;
+  let logFile: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "devguide-hook-task-"));
+    dataDir = join(dir, "data");
+    logFile = join(dataDir, "events.jsonl");
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a /devguide prompt opens a task next to the raw log entry", () => {
+    const run = runHook(
+      { hook_event_name: "UserPromptSubmit", session_id: "s", cwd: dir, prompt: "/devguide fix the export" },
+      logFile,
+      dir,
+    );
+    assert.equal(run.status, 0);
+    assert.equal(run.stdout, "");
+    assert.equal(run.entries[0]!.kind, "task_started");
+    const task = currentTask(dataDir);
+    assert.equal(task?.record.description, "fix the export");
+    assert.deepEqual(task?.record.session_ids, ["s"]);
+    const events = readEvents(task!);
+    assert.equal(events.length, 1);
+    assert.equal(events[0]!.kind, "task_started");
+    assert.equal(events[0]!.code_version.commit, null);
+  });
+
+  it("an Edit in an open task becomes a file_changed event", () => {
+    const task = startTask(dataDir, "t", "s", NO_VERSION);
+    const path = join(dir, "hello.txt");
+    runHook(
+      {
+        hook_event_name: "PostToolUse",
+        session_id: "s",
+        cwd: dir,
+        tool_name: "Edit",
+        tool_input: { file_path: path, old_string: "hello", new_string: "greetings" },
+        tool_response: { filePath: path, oldString: "hello", newString: "greetings", originalFile: "hello x", structuredPatch: [] },
+      },
+      logFile,
+      dir,
+    );
+    const last = readEvents(task).at(-1) as FileChangedEvent;
+    assert.equal(last.kind, "file_changed");
+    assert.equal(last.path, "hello.txt");
+    assert.equal(last.before, "hello");
+    assert.equal(last.after, "greetings");
+  });
+
+  it("a SessionStart with an open task answers with additionalContext naming the task", () => {
+    const task = startTask(dataDir, "t", "s1", NO_VERSION);
+    const run = runHook({ hook_event_name: "SessionStart", session_id: "s2", cwd: dir, source: "resume" }, logFile, dir);
+    assert.equal(run.status, 0);
+    const output = JSON.parse(run.stdout) as { hookSpecificOutput: { hookEventName: string; additionalContext: string } };
+    assert.equal(output.hookSpecificOutput.hookEventName, "SessionStart");
+    assert.match(output.hookSpecificOutput.additionalContext, new RegExp(`DevGuide task ${task.record.id} is open`));
+    assert.equal(readEvents(task).at(-1)!.kind, "session_resumed");
+    assert.equal(run.entries[0]!.event, "SessionStart");
+  });
+
+  it("a SessionStart without a task prints nothing", () => {
+    const run = runHook({ hook_event_name: "SessionStart", session_id: "s", cwd: dir, source: "startup" }, logFile, dir);
+    assert.equal(run.stdout, "");
+    assert.equal(existsSync(join(dataDir, "tasks")), false);
+  });
+
+  it("exits 0 and reports on stderr when the task directory cannot be written", () => {
+    // A regular file named `tasks` makes creating the task directory fail; the raw log still works.
+    runHook({ hook_event_name: "SessionStart", session_id: "s", cwd: dir, source: "startup" }, logFile, dir);
+    writeFileSync(join(dataDir, "tasks"), "x");
+    const run = runHook(
+      { hook_event_name: "UserPromptSubmit", session_id: "s", cwd: dir, prompt: "/devguide fix the export" },
+      logFile,
+      dir,
+    );
+    assert.equal(run.status, 0);
+    assert.match(run.stderr, /could not record task event/);
+    assert.equal(run.entries.length, 2);
+    assert.equal(run.entries[1]!.kind, "task_started");
+  });
+});
+
 describe("record-event helpers", () => {
-  it("resolveLogFile prefers the environment variable", () => {
-    assert.equal(resolveLogFile({ DEVGUIDE_LOG_FILE: "/tmp/x.jsonl" }, "/repo"), "/tmp/x.jsonl");
+  it("resolveLogFile uses DEVGUIDE_DIR or .devguide under the working directory", () => {
+    assert.equal(resolveLogFile({ DEVGUIDE_DIR: "/tmp/dg" }, "/repo"), join("/tmp/dg", "events.jsonl"));
     assert.equal(resolveLogFile({}, "/repo"), join("/repo", ".devguide", "events.jsonl"));
   });
 

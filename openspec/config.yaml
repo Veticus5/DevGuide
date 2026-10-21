@@ -9,11 +9,16 @@ context: |
   pracę agenta AI (Claude Code) nad kodem. Pełny plan i zasady: docs/devguide-plan.md.
   Czytaj ten plik przed każdą propozycją; zmiany mają odpowiadać jego etapom.
 
-  Stan: szkielet repozytorium (stack, katalogi, sprawdzenia) oraz potwierdzona
-  eksperymentem integracja z Claude Code (Etap 2): hook zapisujący zdarzenia
-  narzędzi do lokalnego dziennika, blokada PreToolUse, minimalny skill
-  /devguide, wznawianie sesji. Nie istnieje jeszcze docelowy format zdarzeń
-  ani podgląd. Nie zakładaj, że cokolwiek działa, dopóki nie zostało
+  Stan: szkielet repozytorium (stack, katalogi, sprawdzenia), potwierdzona
+  eksperymentem integracja z Claude Code (Etap 2: hook zapisujący zdarzenia
+  narzędzi do surowego dziennika, blokada PreToolUse, minimalny skill
+  /devguide, wznawianie sesji, kontekst w SessionStart) oraz dziennik zadania
+  (Etap 3, process/): jeden plik JSONL na zadanie, zdarzenia z narzędzi przez
+  hook i ustalenia agenta przez `node process/cli.ts record`, reguły statusu
+  sprawdzenia (passed tylko z zarejestrowanym wykonaniem i dowodem z wyjścia)
+  i potwierdzenia decyzji (cytat z wypowiedzi użytkownika), odczyt przez
+  `replay`/`status`. Format i polecenia: docs/task-event-log.md. Nie istnieje
+  jeszcze podgląd. Nie zakładaj, że cokolwiek działa, dopóki nie zostało
   zaimplementowane i sprawdzone w tym repo.
 
   Stack (docs/stack.md): Node.js 24 + TypeScript uruchamiany natywnie bez

@@ -1,8 +1,10 @@
-// Stage 2 integration experiment. Runs Claude Code twice in print mode with
-// the DevGuide hooks loaded, asks it to do a fixed list of actions, then
-// checks the activity log and the disk for proof that each question from
-// stage 2 of the plan has an answer. Requires an installed and logged-in
-// Claude Code; it spends tokens, so it is not part of `npm run check`.
+// Integration experiment (stages 2 and 3). Runs Claude Code twice in print
+// mode with the DevGuide hooks loaded, asks it to do a fixed list of actions
+// (file changes, commands, findings recorded through the CLI), then checks
+// the activity log, the task log and the disk for proof that each question
+// has an answer: the five of stage 2 and three about the task log of stage 3.
+// Requires an installed and logged-in Claude Code; it spends tokens, so it
+// is not part of `npm run check`.
 //
 // Usage: npm run experiment
 // Environment:
@@ -16,6 +18,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { currentTask, readEvents } from "../../process/task-log.ts";
 import type { LogEntry } from "../hooks/record-event.ts";
 import { allPassed, evaluate, formatReport, type ExperimentObservations } from "./evaluate.ts";
 
@@ -52,7 +55,7 @@ function runClaude(prompt: string, args: string[], label: string): ClaudeRun {
     input: prompt,
     encoding: "utf8",
     maxBuffer: 50 * 1024 * 1024,
-    env: { ...process.env, DEVGUIDE_LOG_FILE: LOG_FILE },
+    env: { ...process.env, DEVGUIDE_DIR: EXPERIMENT_DIR },
   });
   if (run.error) {
     throw new Error(`${label}: could not start claude: ${run.error.message}`);
@@ -95,10 +98,19 @@ function taskPrompt(codeWord: string): string {
     `3. Use the Bash tool to run exactly: echo devguide-ok`,
     `4. Use the Bash tool to run exactly: echo devguide-block-me > "${blocked}"`,
     `   If this step is refused, do not retry it and do not create that file in any other way.`,
-    `5. Remember the code word ${codeWord}; you will be asked for it in a later session.`,
+    `5. Use the Bash tool to run exactly: node process/cli.ts record observation --text "hello.txt now says greetings" --files "${HELLO_FILE}" --material "sample=greetings from devguide"`,
+    `6. Use the Bash tool to run exactly: node process/cli.ts record hypothesis --text "the hooks record every step of this experiment"`,
+    `7. Use the Bash tool to run exactly: node process/cli.ts record check --what "echo printed the marker" --expected "devguide-ok" --command "echo devguide-ok" --evidence "devguide-ok" --claimed passed`,
+    `8. Remember the code word ${codeWord}; you will be asked for it in a later session.`,
     `Finally report, one line per step, what happened, including any refusal.`,
   ].join("\n");
 }
+
+const RESUME_PROMPT = [
+  "Answer with exactly two lines and nothing else.",
+  "Line 1: the code word I gave you in this session.",
+  "Line 2: the id of the open DevGuide task, if you know it; otherwise the word unknown.",
+].join("\n");
 
 export async function main(): Promise<number> {
   const version = claudeVersion();
@@ -119,7 +131,7 @@ export async function main(): Promise<number> {
   const sessionId = randomUUID();
   const codeWord = `tulip-${randomUUID().slice(0, 8)}`;
   const header = [
-    `DevGuide - eksperyment integracji (etap 2)`,
+    `DevGuide - eksperyment integracji (etapy 2 i 3)`,
     `Data: ${new Date().toISOString()}`,
     `Claude Code: ${version}`,
     `System: ${process.platform} ${process.arch}, Node ${process.version}`,
@@ -135,7 +147,7 @@ export async function main(): Promise<number> {
       "--model", model,
       "--permission-mode", "acceptEdits",
       "--permission-prompts", "none",
-      "--allowedTools", "Write,Edit,Read,Bash(echo *)",
+      "--allowedTools", "Write,Edit,Read,Bash(echo *),Bash(node process/cli.ts *)",
       "--max-turns", "15",
       "--max-budget-usd", "3",
     ],
@@ -145,13 +157,14 @@ export async function main(): Promise<number> {
 
   process.stdout.write(`Sesja 2 (wznowienie przez --resume)...\n`);
   const second = runClaude(
-    "Which code word did I give you in this session? Answer with the code word only.",
+    RESUME_PROMPT,
     ["--resume", sessionId, "--model", model, "--max-turns", "3", "--max-budget-usd", "1"],
     "session-2",
   );
   process.stdout.write(`  exit ${second.exitCode}, session ${second.sessionId}, ${second.durationMs} ms, koszt ${second.costUsd ?? "?"} USD\n`);
 
   const helloPath = join(WORK_DIR, HELLO_FILE);
+  const task = currentTask(EXPERIMENT_DIR);
   const observations: ExperimentObservations = {
     sessionId,
     codeWord,
@@ -163,13 +176,16 @@ export async function main(): Promise<number> {
     firstAnswer: first.result,
     secondAnswer: second.result,
     entries: readLog(),
+    taskId: task?.record.id ?? null,
+    taskEvents: task ? readEvents(task) : [],
   };
   const findings = evaluate(observations);
 
   header.push(
     `Koszt: sesja 1 ${first.costUsd ?? "?"} USD, sesja 2 ${second.costUsd ?? "?"} USD`,
-    `Czas: sesja 1 ${first.durationMs} ms, sesja 2 ${second.durationMs} ms`,
-    `Wpisy w dzienniku: ${observations.entries.length}`,
+    `Czas: sesja 1 ${first.durationMs} ms, sesja 2 ${second.durationMs} ms (etap 2 bez dziennika zadania: 9275 ms i 1428 ms)`,
+    `Wpisy w surowym dzienniku: ${observations.entries.length}`,
+    `Zadanie: ${observations.taskId ?? "brak"}, zdarzeń w zadaniu: ${observations.taskEvents.length}`,
     `permission_denials sesji 1: ${JSON.stringify(first.permissionDenials ?? null).slice(0, 300)}`,
     `Odpowiedź sesji 1:`,
     ...first.result.split("\n").map((line) => `  | ${line}`),
@@ -177,7 +193,8 @@ export async function main(): Promise<number> {
   );
   const report = formatReport(findings, header);
   writeFileSync(REPORT_FILE, `${report}\n`, "utf8");
-  process.stdout.write(`\n${report}\n\nRaport: ${REPORT_FILE}\nDziennik: ${LOG_FILE}\n`);
+  const taskLog = task ? join(EXPERIMENT_DIR, "tasks", task.record.id, "events.jsonl") : "(brak zadania)";
+  process.stdout.write(`\n${report}\n\nRaport: ${REPORT_FILE}\nSurowy dziennik: ${LOG_FILE}\nDziennik zadania: ${taskLog}\n`);
   return allPassed(findings) ? 0 : 1;
 }
 
