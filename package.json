@@ -1,0 +1,23 @@
+{
+  "name": "devguide",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Toolset that helps a developer understand and control the work an AI coding agent does on their code.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "check": "npm run check:types && npm run check:test && npm run check:links && npm run check:specs",
+    "check:types": "tsc --noEmit",
+    "check:test": "node --test \"{agent,process,ui,demo,scripts}/**/*.test.ts\"",
+    "check:links": "node scripts/check-links.ts",
+    "check:specs": "openspec validate --all"
+  },
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "@fission-ai/openspec": "^1.14.3",
+    "@types/node": "^24.19.2",
+    "typescript": "^7.0.2"
+  }
+}
