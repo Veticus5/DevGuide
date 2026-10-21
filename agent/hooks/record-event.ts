@@ -1,10 +1,15 @@
 // Claude Code hook that appends one JSON line per hook event to a local
-// activity log. One script serves every hook event: the event name comes
-// from the `hook_event_name` field that Claude Code puts on stdin.
+// activity log and feeds the DevGuide task log. One script serves every hook
+// event: the event name comes from the `hook_event_name` field that Claude
+// Code puts on stdin.
 //
 // Behaviour:
-// - Every event is written to DEVGUIDE_LOG_FILE, or to
+// - Every event is written to <DEVGUIDE_DIR>/events.jsonl, or to
 //   <cwd>/.devguide/events.jsonl when the variable is not set.
+// - When a DevGuide task is open (or the prompt is `/devguide ...`), the
+//   event is also turned into task events by `process/task-log.ts`.
+// - A SessionStart with an open task answers with `additionalContext`
+//   describing the task, so the agent knows where it stands.
 // - A failed write never blocks the agent: the error goes to stderr and the
 //   process still exits with 0.
 // - PreToolUse for a Bash command containing BLOCK_MARKER answers with a
@@ -14,30 +19,21 @@
 // Usage (configured in a Claude Code settings file):
 //   {"type": "command", "command": "node", "args": ["agent/hooks/record-event.ts"]}
 
-import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
+
+import { readCommit, readWorkingTree } from "../../process/code-version.ts";
+import { rawLogFile, resolveDataDir } from "../../process/paths.ts";
+import { isTaskStart, recordHookEvent, type HookInputLike, type TaskLogDeps } from "../../process/task-log.ts";
+
+export { isTaskStart };
 
 /** A Bash command containing this text is refused before it runs. */
 export const BLOCK_MARKER = "devguide-block-me";
 
-/** Prefix of a user prompt that starts a DevGuide task. */
-export const TASK_PREFIX = "/devguide";
-
-export const DEFAULT_LOG_DIRECTORY = ".devguide";
-export const DEFAULT_LOG_FILE = "events.jsonl";
-
 /** The JSON Claude Code sends on stdin. Only the fields the hook reads are typed. */
-export interface HookInput {
-  hook_event_name?: string;
-  session_id?: string;
-  cwd?: string;
-  tool_name?: string;
-  tool_input?: Record<string, unknown>;
-  prompt?: string;
-  [key: string]: unknown;
-}
+export type HookInput = HookInputLike;
 
 /** One line of the activity log. */
 export interface LogEntry {
@@ -63,6 +59,14 @@ export interface PreToolUseDecision {
     hookEventName: "PreToolUse";
     permissionDecision: "deny";
     permissionDecisionReason: string;
+  };
+}
+
+/** Context returned to Claude Code for a SessionStart event. */
+export interface SessionStartContext {
+  hookSpecificOutput: {
+    hookEventName: "SessionStart";
+    additionalContext: string;
   };
 }
 
@@ -114,39 +118,15 @@ export function handleHookInput(
   return { entry };
 }
 
-export function isTaskStart(prompt: unknown): boolean {
-  if (typeof prompt !== "string") return false;
-  const trimmed = prompt.trimStart();
-  return trimmed === TASK_PREFIX || trimmed.startsWith(`${TASK_PREFIX} `) || trimmed.startsWith(`${TASK_PREFIX}\n`);
-}
-
 export function shouldBlock(input: HookInput): boolean {
   if (input.tool_name !== "Bash") return false;
   const command = input.tool_input?.["command"];
   return typeof command === "string" && command.includes(BLOCK_MARKER);
 }
 
-/** Resolves the log file: the environment variable wins, otherwise `<cwd>/.devguide/events.jsonl`. */
+/** Resolves the raw log file: `<DEVGUIDE_DIR or <cwd>/.devguide>/events.jsonl`. */
 export function resolveLogFile(env: NodeJS.ProcessEnv, cwd: string | null): string {
-  const fromEnv = env["DEVGUIDE_LOG_FILE"];
-  if (fromEnv && fromEnv.length > 0) return fromEnv;
-  return join(cwd ?? process.cwd(), DEFAULT_LOG_DIRECTORY, DEFAULT_LOG_FILE);
-}
-
-/** Current commit of the repository that contains `cwd`, or null when there is none. */
-export function readCodeVersion(cwd: string | null): string | null {
-  try {
-    const output = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: cwd ?? process.cwd(),
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 5_000,
-    });
-    const version = output.trim();
-    return version.length > 0 ? version : null;
-  } catch {
-    return null;
-  }
+  return rawLogFile(resolveDataDir(env, cwd));
 }
 
 export function appendEntry(logFile: string, entry: LogEntry): void {
@@ -172,16 +152,41 @@ export async function main(): Promise<number> {
   }
 
   const cwd = typeof input.cwd === "string" ? input.cwd : null;
-  const result = handleHookInput(input, new Date(), readCodeVersion(cwd));
+  const commit = readCommit(cwd);
+  const result = handleHookInput(input, new Date(), commit);
+  const dataDir = resolveDataDir(process.env, cwd);
 
   try {
-    appendEntry(resolveLogFile(process.env, cwd), result.entry);
+    appendEntry(rawLogFile(dataDir), result.entry);
   } catch (error) {
     process.stderr.write(`record-event: could not write log: ${String(error)}\n`);
   }
 
   if (result.stdout) {
     process.stdout.write(`${JSON.stringify(result.stdout)}\n`);
+    return 0;
+  }
+
+  // The working-tree fingerprint costs a few git calls, so it is computed
+  // only when a task event is actually created.
+  let workingTree: string | null | undefined;
+  const deps: TaskLogDeps = {
+    now: () => new Date(),
+    codeVersion: () => {
+      if (workingTree === undefined) workingTree = commit === null ? null : readWorkingTree(cwd);
+      return { commit, working_tree: workingTree };
+    },
+  };
+  try {
+    const recording = recordHookEvent(input, dataDir, deps);
+    if (recording.context !== null) {
+      const output: SessionStartContext = {
+        hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: recording.context },
+      };
+      process.stdout.write(`${JSON.stringify(output)}\n`);
+    }
+  } catch (error) {
+    process.stderr.write(`record-event: could not record task event: ${String(error)}\n`);
   }
   return 0;
 }

@@ -3,6 +3,8 @@
 // turns them into one verdict per question from the plan. No I/O here, so
 // the rules can be tested without Claude Code.
 
+import type { TaskEvent } from "../../process/events.ts";
+import { CLI_RECORD_MARKER } from "../../process/task-log.ts";
 import { BLOCK_MARKER } from "../hooks/record-event.ts";
 import type { LogEntry } from "../hooks/record-event.ts";
 
@@ -33,6 +35,10 @@ export interface ExperimentObservations {
   /** `result` field of session 2 (the resumed run). */
   secondAnswer: string;
   entries: LogEntry[];
+  /** Id of the DevGuide task opened by session 1, from the data directory; null when none. */
+  taskId: string | null;
+  /** Events of that task. */
+  taskEvents: TaskEvent[];
 }
 
 export const CONFIRMATION_LINE = "DevGuide mode is active.";
@@ -47,6 +53,9 @@ export function evaluate(observations: ExperimentObservations): Finding[] {
     evaluateRecording(observations, own),
     evaluateBlock(observations, own),
     evaluateResume(observations, own),
+    evaluateTaskFindings(observations),
+    evaluateTaskToolEvents(observations),
+    evaluateTaskContext(observations),
   ];
 }
 
@@ -217,6 +226,137 @@ function evaluateResume(observations: ExperimentObservations, entries: LogEntry[
   };
 }
 
+// --- stage 3: the task log -----------------------------------------------------
+
+function evaluateTaskFindings(observations: ExperimentObservations): Finding {
+  const evidence: string[] = [];
+  const notes: string[] = [];
+  const events = observations.taskEvents;
+  let ok = observations.taskId !== null;
+  if (observations.taskId === null) evidence.push("brak otwartego zadania w katalogu danych");
+
+  const observation = events.find((event) => event.kind === "observation");
+  if (observation && observation.kind === "observation") {
+    const illustrations = observation.materials.filter((item) => item.nature === "illustration").length;
+    evidence.push(`observation ${observation.id} o ${observation.time}, materiały: ${observation.materials.length} (ilustracje: ${illustrations})`);
+    if (observation.materials.length === 0 || illustrations !== observation.materials.length) {
+      ok = false;
+      evidence.push("obserwacja bez materiału oznaczonego jako ilustracja");
+    }
+  } else {
+    ok = false;
+    evidence.push("brak zdarzenia observation w zadaniu");
+  }
+
+  const hypothesis = events.find((event) => event.kind === "hypothesis");
+  if (hypothesis) evidence.push(`hypothesis ${hypothesis.id} o ${hypothesis.time}`);
+  else {
+    ok = false;
+    evidence.push("brak zdarzenia hypothesis w zadaniu");
+  }
+
+  const check = events.find((event) => event.kind === "check");
+  if (check && check.kind === "check") {
+    const execution = events.find((event) => event.id === check.execution_id);
+    evidence.push(`check ${check.id}: claimed=${check.claimed}, status=${check.status}, execution_id=${check.execution_id ?? "null"}${check.reason ? `, reason=${check.reason}` : ""}`);
+    if (check.status !== "passed") {
+      ok = false;
+      evidence.push("sprawdzenie nie ma statusu passed");
+    }
+    if (!execution || execution.kind !== "command_run" || !execution.stdout.includes("devguide-ok")) {
+      ok = false;
+      evidence.push("execution_id nie wskazuje command_run z devguide-ok w stdout");
+    } else {
+      evidence.push(`wykonanie ${execution.id}: ${JSON.stringify(execution.command)} ze stdout ${JSON.stringify(execution.stdout.trim())}`);
+    }
+  } else {
+    ok = false;
+    evidence.push("brak zdarzenia check w zadaniu");
+  }
+
+  const agentEvents = events.filter((event) => event.origin === "agent" && event.kind !== "agent_message");
+  notes.push(`zdarzeń pochodzenia agent (bez komunikatów): ${agentEvents.length}`);
+  return {
+    question: "Czy ustalenia agenta trafiają do dziennika zadania",
+    verdict: ok ? "tak" : "nie",
+    evidence,
+    notes,
+  };
+}
+
+function evaluateTaskToolEvents(observations: ExperimentObservations): Finding {
+  const evidence: string[] = [];
+  const notes: string[] = [];
+  const events = observations.taskEvents;
+  let ok = true;
+
+  const started = events.find((event) => event.kind === "task_started");
+  if (started && started.kind === "task_started" && started.description.includes(observations.codeWord)) {
+    evidence.push(`task_started ${started.id} z opisem zadania`);
+  } else {
+    ok = false;
+    evidence.push("brak task_started z treścią zadania");
+  }
+
+  const edited = events.find(
+    (event) => event.kind === "file_changed" && event.tool === "Edit" && event.path.endsWith(observations.helloFile),
+  );
+  if (edited && edited.kind === "file_changed" && edited.before !== null && edited.after !== null) {
+    evidence.push(`file_changed ${edited.id} (Edit) dla ${edited.path}: before=${JSON.stringify(edited.before)}, after=${JSON.stringify(edited.after)}`);
+  } else {
+    ok = false;
+    evidence.push(`brak file_changed z Edit dla ${observations.helloFile} z before i after`);
+  }
+  const created = events.find((event) => event.kind === "file_changed" && event.created && event.path.endsWith(observations.helloFile));
+  if (created) evidence.push(`file_changed ${created.id} (utworzenie) dla ${observations.helloFile}`);
+
+  const run = events.find((event) => event.kind === "command_run" && event.stdout.includes("devguide-ok"));
+  if (run && run.kind === "command_run") {
+    evidence.push(`command_run ${run.id}: ${JSON.stringify(run.command)}, exit_code=${run.exit_code}`);
+  } else {
+    ok = false;
+    evidence.push("brak command_run z devguide-ok");
+  }
+
+  const cliRuns = events.filter((event) => event.kind === "command_run" && event.command.includes(CLI_RECORD_MARKER));
+  if (cliRuns.length > 0) {
+    ok = false;
+    evidence.push(`UWAGA: ${cliRuns.length} command_run dla wywołań CLI zapisu, które miały być pominięte`);
+  } else {
+    evidence.push("brak command_run dla wywołań CLI zapisu");
+  }
+
+  const versions = new Set(events.map((event) => `${event.code_version.commit}/${event.code_version.working_tree}`));
+  notes.push(`różnych wersji kodu w zadaniu: ${versions.size}; zdarzeń w zadaniu: ${events.length}`);
+  const failures = events.filter((event) => event.kind === "tool_failed");
+  if (failures.length > 0) notes.push(`tool_failed: ${failures.length}, pierwszy: ${JSON.stringify(failures[0]).slice(0, 300)}`);
+  return {
+    question: "Czy zdarzenia narzędzi trafiają do dziennika zadania",
+    verdict: ok ? "tak" : "nie",
+    evidence,
+    notes,
+  };
+}
+
+function evaluateTaskContext(observations: ExperimentObservations): Finding {
+  const evidence: string[] = [];
+  const resumed = observations.taskEvents.find((event) => event.kind === "session_resumed" && event.source === "resume");
+  if (resumed) evidence.push(`session_resumed ${resumed.id} o ${resumed.time}`);
+  else evidence.push("brak zdarzenia session_resumed w zadaniu");
+  const knows = observations.taskId !== null && observations.secondAnswer.includes(observations.taskId);
+  evidence.push(
+    knows
+      ? `odpowiedź sesji 2 zawiera identyfikator zadania ${observations.taskId}`
+      : `odpowiedź sesji 2 nie zawiera identyfikatora zadania ${observations.taskId ?? "(brak)"}: ${JSON.stringify(observations.secondAnswer.slice(0, 120))}`,
+  );
+  return {
+    question: "Czy agent dostaje kontekst zadania po wznowieniu sesji",
+    verdict: resumed !== undefined && knows ? "tak" : "nie",
+    evidence,
+    notes: ["identyfikator zadania zna tylko hook; CLI wypisuje identyfikatory zdarzeń, więc agent może go znać wyłącznie z additionalContext"],
+  };
+}
+
 export function formatReport(findings: Finding[], header: string[]): string {
   const lines: string[] = [...header, ""];
   for (const finding of findings) {
@@ -225,6 +365,10 @@ export function formatReport(findings: Finding[], header: string[]): string {
     for (const note of finding.notes) lines.push(`    uwaga: ${note}`);
   }
   lines.push("");
-  lines.push(allPassed(findings) ? "Wynik: wszystkie pięć pytań potwierdzone." : "Wynik: co najmniej jedno pytanie bez potwierdzenia.");
+  lines.push(
+    allPassed(findings)
+      ? `Wynik: wszystkie pytania (${findings.length}) potwierdzone.`
+      : "Wynik: co najmniej jedno pytanie bez potwierdzenia.",
+  );
   return lines.join("\n");
 }

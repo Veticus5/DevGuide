@@ -2,7 +2,7 @@
 
 DevGuide is a toolset that lets a developer see and control what an AI coding agent does to their code: the problem being investigated, what is established versus assumed, the proposed fix, the changed code with examples, the decisions that need a human answer, and what was actually checked.
 
-Status: early. The repository, stack and project checks are in place, and the integration with Claude Code (hooks, a minimal `/devguide` skill, blocking a tool call, resuming a session) is confirmed by a repeatable experiment. There is no event log or preview yet. See [docs/devguide-plan.md](docs/devguide-plan.md) for the product plan and stages, [docs/stack.md](docs/stack.md) for the stack and why it was chosen, and [docs/claude-code-integration.md](docs/claude-code-integration.md) for what the integration can and cannot do.
+Status: early. The repository, stack and project checks are in place; the integration with Claude Code (hooks, a minimal `/devguide` skill, blocking a tool call, resuming a session) is confirmed by a repeatable experiment; and a task event log records the course of a task: tool observations from the hooks, findings recorded by the agent through a CLI, with rules that keep "check passed" tied to a real run and a user decision tied to the user's words. There is no preview yet. See [docs/devguide-plan.md](docs/devguide-plan.md) for the product plan and stages, [docs/stack.md](docs/stack.md) for the stack and why it was chosen, [docs/claude-code-integration.md](docs/claude-code-integration.md) for what the integration can and cannot do, and [docs/task-event-log.md](docs/task-event-log.md) for the event format and the CLI.
 
 ## Prerequisites
 
@@ -44,7 +44,11 @@ One more command checks the integration with Claude Code end to end. It is not p
 npm run experiment
 ```
 
-It runs two short `claude -p` sessions with the DevGuide hooks loaded, then reports for each question of stage 2 of the plan whether the log and the disk confirm it. Details and results: [docs/claude-code-integration.md](docs/claude-code-integration.md).
+It runs two short `claude -p` sessions with the DevGuide hooks loaded, then reports for each question of stages 2 and 3 of the plan whether the logs and the disk confirm it. Details and results: [docs/claude-code-integration.md](docs/claude-code-integration.md). To read the task the experiment recorded:
+
+```bash
+DEVGUIDE_DIR=.devguide/experiment node process/cli.ts replay
+```
 
 ## Working on the project
 
@@ -73,7 +77,7 @@ openspec update          # refresh .claude/ commands after upgrading OpenSpec
 ## Repository layout
 
 - `agent/` - integration with Claude Code: hooks, the guiding skill, the user control point.
-- `process/` - local process: event log and the server behind the preview.
+- `process/` - local process: the task event log and its CLI, later the server behind the preview.
 - `ui/` - local preview.
 - `demo/` - demonstration project with a real bug, used for the end-to-end example.
 - `scripts/` - project checks and helper scripts.

@@ -2,7 +2,7 @@
 
 DevGuide is a toolset that helps a developer understand and control the work an AI coding agent (Claude Code) does on their code. The full product plan, principles and stages are in [docs/devguide-plan.md](docs/devguide-plan.md). Read it before planning any change.
 
-Current state: repository scaffold (stack, project directories, checks) and a confirmed integration with Claude Code: hooks that record tool events to a local log, a `PreToolUse` block, a minimal `/devguide` skill and session resume, all exercised by `npm run experiment`. What was confirmed, how, and the known limits are in [docs/claude-code-integration.md](docs/claude-code-integration.md); base later stages on that file, not on the mockups. No event log format or preview exists yet. Do not assume any capability works until it is implemented and checked in this repository.
+Current state: repository scaffold (stack, project directories, checks), a confirmed integration with Claude Code (hooks that record tool events to a local log, a `PreToolUse` block, a minimal `/devguide` skill, session resume, `SessionStart` context) and the stage 3 task event log in `process/`: one append-only JSONL file per task fed by the hook (tool observations) and by `node process/cli.ts record` (the agent's findings), with the rules that a check is `passed` only with a recorded execution and evidence from its output and that a decision is confirmed only by the user's own words; `replay` and `status` read it back. All of it is exercised by `npm run experiment`. What was confirmed, how, and the known limits are in [docs/claude-code-integration.md](docs/claude-code-integration.md); the event format and the CLI are in [docs/task-event-log.md](docs/task-event-log.md). Base later stages on those files, not on the mockups. No preview exists yet. Do not assume any capability works until it is implemented and checked in this repository.
 
 ## How work is organised
 
@@ -24,7 +24,7 @@ Rules for the agent:
 ## Repository layout
 
 - `agent/` - integration with Claude Code: `hooks/` (the hook script and its tests), `experiment/` (hook settings for the experiment, the experiment runner), later the user control point (stages 2, 5, 6). The `/devguide` skill itself is in `.claude/skills/devguide/`.
-- `process/` - local process: event log and the server behind the preview (stages 3, 4).
+- `process/` - local process: the task event log, its rules and CLI (stage 3, done), later the server behind the preview (stage 4). Nothing in `process/` imports from `agent/`.
 - `ui/` - local preview (stage 4).
 - `demo/` - demonstration project with a real bug for the end-to-end example (stage 7).
 - `scripts/` - project checks and helper scripts (`check-links.ts`).
@@ -58,4 +58,4 @@ Before finishing a change confirm that:
 - `npm run check` passes (types, tests, relative links in Markdown, `openspec validate --all`),
 - Markdown renders (closed code fences, consistent list markers),
 - any check the change's `tasks.md` names was actually run, with its output reported,
-- a change that touches the Claude Code integration (`agent/`, `.claude/skills/devguide/`) was exercised with `npm run experiment`, which needs a logged-in Claude Code and spends tokens.
+- a change that touches the Claude Code integration (`agent/`, `.claude/skills/devguide/`) or the task log fed by it (`process/`) was exercised with `npm run experiment`, which needs a logged-in Claude Code and spends tokens.

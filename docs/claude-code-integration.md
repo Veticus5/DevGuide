@@ -15,6 +15,8 @@ Confirmed with:
 
 Rerun the experiment after upgrading Claude Code. It exits with 0 only when every question below is still confirmed.
 
+Since stage 3 the same run also asks the agent to record three findings through `node process/cli.ts record` and checks three more questions about the [task event log](task-event-log.md): findings reach the task, tool events reach the task, and the agent receives the task context after a resume. Rerun on 2026-10-21 with the same Claude Code 2.1.300: eight questions confirmed, 21 raw log entries, 11 task events, session 1 17.2 s and session 2 1.9 s, about 0.45 USD in total (the extra steps are extra model turns; the hook itself still costs about 120 ms per tool call).
+
 ## The five questions
 
 | Question from the plan | Answer | Evidence in the run | Limits |
@@ -52,11 +54,13 @@ Common to every event: `session_id`, `transcript_path`, `cwd`, `scratchpad_dir`,
 - The exec form `{"type":"command","command":"node","args":["agent/hooks/record-event.ts"]}` with a path relative to the session's working directory works on Windows from Git Bash. The `${CLAUDE_PROJECT_DIR}` placeholder was not needed and its expansion inside `args` remains untested.
 - In `-p` mode in an untrusted workspace Claude Code ignores `permissions.allow` from the project settings and says so on stderr. `--allowedTools` on the command line still applies. `--permission-mode acceptEdits` plus `--permission-prompts none` ran the experiment without any prompt.
 - The result JSON of `-p` contains `session_id`, `result`, `total_cost_usd`, `duration_ms`, `num_turns`, `permission_denials` and `modelUsage`.
-- The activity log line written by the hook has the fields `time`, `session_id`, `event`, `source` (`hook`, or `agent` for `Stop`), `code_version` (commit or `null`), `cwd`, optional `kind` (`task_started`, `blocked`) and `payload` with the rest of the hook input unchanged.
+- The activity log line written by the hook has the fields `time`, `session_id`, `event`, `source` (`hook`, or `agent` for `Stop`), `code_version` (commit or `null`), `cwd`, optional `kind` (`task_started`, `blocked`) and `payload` with the rest of the hook input unchanged. The log lives in `<DEVGUIDE_DIR>/events.jsonl` (default `.devguide/`); since stage 3 the hook also feeds the task log in the same directory.
+- `SessionStart` `additionalContext` works in `-p` mode (confirmed in stage 3): the hook answers `{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"..."}}` and the agent can use the text. In the resumed session the agent reported the DevGuide task id, which it could only have read from that context.
+- Environment variables set for the `claude` process reach both the hooks and the commands the agent runs through its Bash tool: `DEVGUIDE_DIR` set by the experiment was seen by the hook and by `node process/cli.ts record` alike.
 
 ## Consequences for the next stages
 
-- Stage 3 (event log) can take tool observations straight from `PostToolUse`: paths and patches for file changes, `stdout` and `stderr` for commands. It must treat the absence of an exit code as a fact: "the command ran" is known, "the command succeeded" needs a separate check.
+- Stage 3 (event log, done): takes tool observations straight from `PostToolUse`: paths and patches for file changes, `stdout` and `stderr` for commands. It treats the absence of an exit code as a fact: `exit_code` is recorded as unknown, and "the command succeeded" needs a check with evidence from the output. See [task-event-log.md](task-event-log.md).
 - Stage 5 (guiding skill) can rely on `/devguide` as the single entry point and on `UserPromptSubmit` to mark the start without the agent's cooperation. Structured findings from the skill still need a channel of their own; a hook cannot see the agent's reasoning, only `last_assistant_message` at the end of a turn.
 - Stage 6 (control point) can enforce "do not apply before approval" with a `PreToolUse` deny on `Write`, `Edit` and file-writing `Bash` calls, as long as the condition is expressed over `tool_input`. The rule must be fail-closed (`onFailure: "block"`) and that needs its own test.
 - Resuming after an interruption is Claude Code's job; DevGuide only has to record the session id and recognise `source: resume`.
@@ -65,6 +69,6 @@ Common to every event: `session_id`, `transcript_path`, `cwd`, `scratchpad_dir`,
 
 - Hook behaviour on Windows without Git Bash (PowerShell shell) and on Linux. CI runs only the unit tests of the hook script.
 - Interactive sessions. Every observation above comes from `-p` mode; hooks are the same mechanism, but the permission flow differs.
-- `PostToolUseFailure` payload, `Stop` blocking, `onFailure: "block"`, `updatedInput`, `SessionStart` `additionalContext`.
+- `PostToolUseFailure` payload, `Stop` blocking, `onFailure: "block"`, `updatedInput`. (`SessionStart` `additionalContext` was confirmed in stage 3, see above.)
 - Behaviour when the hook is slow: default timeout for command hooks is 600 s per the documentation, `SessionEnd` has 1.5 s by default (raised to 10 s in the experiment settings).
 - An npm-installed `claude` (a `.cmd` shim); the runner spawns `claude` without a shell and reports Claude Code as unavailable if that fails.
