@@ -135,6 +135,8 @@ export function describeEvent(event: TaskEvent): string {
       return `Użytkownik napisał: „${clip(event.text)}”`;
     case "session_resumed":
       return event.source === "resume" ? "Wznowiono sesję" : `Nowa sesja przy otwartym zadaniu (${event.source})`;
+    case "session_ended":
+      return `Zakończono sesję (${event.reason})`;
     case "observation":
       return `Obserwacja: ${clip(event.text)}${materialsNote(event.materials.length)}`;
     case "hypothesis":
@@ -145,6 +147,8 @@ export function describeEvent(event: TaskEvent): string {
       return `Propozycja: ${clip(event.text)}${materialsNote(event.materials.length)}`;
     case "change_prepared":
       return `Przygotowano zmianę: ${clip(event.text)}${event.files.length > 0 ? ` (pliki: ${event.files.join(", ")})` : ""}`;
+    case "change_explained":
+      return `Objaśniono poprawkę: ${clip(event.title)} (zmiany plików: ${event.change_ids.length}${materialsNote(event.materials.length)})`;
     case "file_changed":
       return `${event.created ? "Utworzono plik" : "Zmieniono plik"} ${event.path}`;
     case "command_run":
@@ -217,14 +221,33 @@ export function formatEvent(event: TaskEvent): string {
   return lines.join("\n");
 }
 
-/** Short context for the agent at the start of a session with an open task (English: the reader is the agent). */
-export function sessionContext(summary: TaskSummary): string {
+const RULES_FOR_AGENT =
+  "Record findings as you work: `node process/cli.ts record observation|hypothesis|proposal|change_explained|check …` (see the /devguide skill for the options). Change files only with Write and Edit. A check needs the exact command you ran and a quote from its output.";
+
+/**
+ * Short context for the agent at the start of a session with an open task
+ * (English: the reader is the agent). A resumed session continues the task;
+ * a fresh session (`startup`) only learns that an earlier task is still open,
+ * with its description clipped, so it does not take that description for a
+ * new instruction.
+ */
+export function sessionContext(summary: TaskSummary, source: string = "resume"): string {
   const open = summary.hypotheses.filter((item) => item.status === "open").length;
   const passed = summary.checks.filter((item) => item.status === "passed" && item.current).length;
   const unverified = summary.checks.filter((item) => item.status === "unverified").length;
+  const recorded = `Recorded so far: ${summary.counts.events} events; hypotheses ${summary.hypotheses.length} (${open} open); checks ${summary.checks.length} (${passed} passed on the current code, ${unverified} unverified); decisions ${summary.decisions.length}.`;
+  if (source === "resume" || source === "compact") {
+    return [
+      `DevGuide task ${summary.task.id} is open: ${summary.task.description}`,
+      recorded,
+      "Run `node process/cli.ts replay` for the full course and `node process/cli.ts status` for the summary before continuing.",
+      RULES_FOR_AGENT,
+    ].join("\n");
+  }
   return [
-    `DevGuide task ${summary.task.id} is open: ${summary.task.description}`,
-    `Recorded so far: ${summary.counts.events} events; hypotheses ${summary.hypotheses.length} (${open} open); checks ${summary.checks.length} (${passed} passed on the current code, ${unverified} unverified); decisions ${summary.decisions.length}.`,
-    "Run `node process/cli.ts replay` for the full course and `node process/cli.ts status` for the summary before continuing.",
+    `A DevGuide task from an earlier session is still open: ${summary.task.id}: ${clip(summary.task.description, 160)}`,
+    recorded,
+    "Do not continue that task unless the user asks for it; a new /devguide starts a new task. Use `node process/cli.ts replay` to read it if needed.",
+    RULES_FOR_AGENT,
   ].join("\n");
 }

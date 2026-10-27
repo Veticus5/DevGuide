@@ -12,11 +12,13 @@
 // 2 usage error.
 
 import { readFileSync } from "node:fs";
+import { basename } from "node:path";
 import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 
-import { AGENT_KINDS, type Draft, type Material } from "./events.ts";
+import { AGENT_KINDS, type Draft, type Material, type TaskEvent } from "./events.ts";
 import { resolveDataDir } from "./paths.ts";
+import { buildPreviewModel } from "./preview-model.ts";
 import { formatEvent, formatSummary, formatTimeline, summarize } from "./replay.ts";
 import { TaskLogError, appendAgentEvent, currentTask, readEvents } from "./task-log.ts";
 
@@ -34,10 +36,15 @@ Kinds and their options (every text option takes one quoted string):
   hypothesis_resolved  --hypothesis <id> --outcome confirmed|rejected --text <why>
   proposal             --text <proposed solution>
   change_prepared      --text <what the change does> [--patch-file <path>]
+  change_explained     --title <name of the fix> --purpose <what it is for> --mechanism <how it works>
+                       [--assumptions <assumptions and limits>] --files <paths it changed>
+                       [--changes <file_changed event ids>] (default: earlier changes of those files
+                       not covered by an earlier explanation)
   decision             --question <what was asked> --quote <the user's exact words> --reading <what it means>
   check                --what <plain-language description> --expected <expectation>
                        --command <exact command that was run> --evidence <text quoted from its output>
                        --claimed passed|failed|inconclusive [--execution <command_run event id>]
+                       [--limits <what the check does not cover>]
 
 Common options:
   --files <a,b,c>                  related paths
@@ -48,7 +55,8 @@ Rules applied on record:
   - a check is "passed" only when the command was run in this task and the evidence occurs in its output;
     otherwise it is recorded as "unverified" with the reason;
   - a decision is "confirmed" only when the quote occurs in something the user wrote in this task;
-  - a resolution needs an existing hypothesis id.
+  - a resolution needs an existing hypothesis id;
+  - an explanation is tied to recorded file changes; with none matching it is kept and shown as unmatched.
 
 Environment: DEVGUIDE_DIR (default ./.devguide).
 `;
@@ -70,6 +78,12 @@ const RECORD_OPTIONS = {
   evidence: { type: "string" },
   claimed: { type: "string" },
   execution: { type: "string" },
+  limits: { type: "string" },
+  title: { type: "string" },
+  purpose: { type: "string" },
+  mechanism: { type: "string" },
+  assumptions: { type: "string" },
+  changes: { type: "string" },
 } as const;
 
 export interface CliIo {
@@ -127,8 +141,24 @@ function record(args: string[], dataDir: string, io: CliIo): number {
   }
   const draft = draftFromOptions(values);
   const event = appendAgentEvent(task, kind, draft);
-  io.stdout(`recorded ${event.kind} ${event.id}\n`);
+  io.stdout(`recorded ${event.kind} ${event.id}${recordNote(event)}\n`);
   return 0;
+}
+
+/** What the log decided about the finding, so the agent sees at once when a claim did not hold. */
+export function recordNote(event: TaskEvent): string {
+  switch (event.kind) {
+    case "check":
+      return event.status === "unverified"
+        ? ` status=unverified reason=${event.reason}: ${event.reason === "no_execution" ? "no recorded run of exactly this command in this task; run it with the Bash tool, then record the check again" : event.reason === "no_evidence" ? "quote text from the command output as --evidence" : "the evidence text does not occur in the output of that run"}`
+        : ` status=${event.status} execution=${event.execution_id}`;
+    case "decision":
+      return event.confirmed ? " confirmed=true" : " confirmed=false: the quote does not occur in anything the user wrote in this task";
+    case "change_explained":
+      return event.change_ids.length > 0 ? ` changes=${event.change_ids.join(",")}` : " changes=none: no recorded Write/Edit of those files matches this explanation";
+    default:
+      return "";
+  }
 }
 
 export function draftFromOptions(values: Record<string, string | string[] | undefined>): Draft {
@@ -147,6 +177,11 @@ export function draftFromOptions(values: Record<string, string | string[] | unde
     hypothesis: "hypothesis_id",
     outcome: "outcome",
     execution: "execution_id",
+    limits: "limits",
+    title: "title",
+    purpose: "purpose",
+    mechanism: "mechanism",
+    assumptions: "assumptions",
   };
   for (const [option, field] of Object.entries(copy)) {
     const value = text(option);
@@ -154,6 +189,8 @@ export function draftFromOptions(values: Record<string, string | string[] | unde
   }
   const files = text("files");
   if (files !== undefined) draft["files"] = files.split(",").map((item) => item.trim()).filter((item) => item.length > 0);
+  const changes = text("changes");
+  if (changes !== undefined) draft["change_ids"] = changes.split(",").map((item) => item.trim()).filter((item) => item.length > 0);
   const patchFile = text("patch-file");
   if (patchFile !== undefined) draft["patch"] = readFileSync(patchFile, "utf8");
 
@@ -197,7 +234,7 @@ function replay(args: string[], dataDir: string, io: CliIo): number {
   }
   const summary = summarize(task.record, events);
   if (values.json) {
-    io.stdout(`${JSON.stringify({ task: task.record, events, summary }, null, 2)}\n`);
+    io.stdout(`${JSON.stringify({ task: task.record, events, summary, model: buildPreviewModel(task.record, events, { repo: basename(io.cwd) }) }, null, 2)}\n`);
   } else {
     io.stdout(`${formatSummary(summary)}\n\nPrzebieg:\n${formatTimeline(events)}\n`);
   }

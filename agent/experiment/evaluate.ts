@@ -4,6 +4,7 @@
 // the rules can be tested without Claude Code.
 
 import type { TaskEvent } from "../../process/events.ts";
+import type { PreviewModel } from "../../process/preview-model.ts";
 import { CLI_RECORD_MARKER } from "../../process/task-log.ts";
 import { BLOCK_MARKER } from "../hooks/record-event.ts";
 import type { LogEntry } from "../hooks/record-event.ts";
@@ -39,9 +40,27 @@ export interface ExperimentObservations {
   taskId: string | null;
   /** Events of that task. */
   taskEvents: TaskEvent[];
+  /** What the preview server answered on /api/preview for the experiment's data directory; null when it did not answer. */
+  preview: PreviewData | null;
+  /** Name of the file session 3 was asked to create and change, relative to the work directory. */
+  noteFile: string;
+  /** `result` of session 3 (the natural task). */
+  thirdAnswer: string;
+  /** Id of the task session 3 opened, or null when it did not open a new one. */
+  thirdTaskId: string | null;
+  thirdTaskEvents: TaskEvent[];
+}
+
+/** The part of the server's /api/preview answer the evaluation reads. */
+export interface PreviewData {
+  task: { id: string } | null;
+  model?: PreviewModel;
 }
 
 export const CONFIRMATION_LINE = "DevGuide mode is active.";
+
+/** Title of the explanation the agent is asked to record; the preview card must carry it unchanged. */
+export const EXPLANATION_TITLE = "Greeting word";
 
 const REFUSAL_WORDS = /block|denied|refus|odm[oó]w|zablokow|not (?:run|executed|allowed)|nie (?:został|zostało|było) (?:wykonan|uruchomion)/i;
 
@@ -56,6 +75,8 @@ export function evaluate(observations: ExperimentObservations): Finding[] {
     evaluateTaskFindings(observations),
     evaluateTaskToolEvents(observations),
     evaluateTaskContext(observations),
+    evaluatePreview(observations),
+    evaluateAutonomy(observations),
   ];
 }
 
@@ -355,6 +376,125 @@ function evaluateTaskContext(observations: ExperimentObservations): Finding {
     evidence,
     notes: ["identyfikator zadania zna tylko hook; CLI wypisuje identyfikatory zdarzeń, więc agent może go znać wyłącznie z additionalContext"],
   };
+}
+
+// --- stage 4: the preview --------------------------------------------------------
+
+function evaluatePreview(observations: ExperimentObservations): Finding {
+  const evidence: string[] = [];
+  const notes: string[] = [];
+  const question = "Czy podgląd pokazuje kartę poprawki z fragmentem przed/po z narzędzia i objaśnieniem od agenta";
+  const preview = observations.preview;
+  if (!preview) {
+    return { question, verdict: "nie", evidence: ["serwer podglądu nie odpowiedział na /api/preview"], notes };
+  }
+  if (!preview.task || !preview.model) {
+    return { question, verdict: "nie", evidence: ["/api/preview nie zawiera zadania ani modelu widoków"], notes };
+  }
+  if (observations.taskId !== null && preview.task.id !== observations.taskId) {
+    evidence.push(`podgląd pokazuje zadanie ${preview.task.id}, a bieżące to ${observations.taskId}`);
+    return { question, verdict: "nie", evidence, notes };
+  }
+  let ok = true;
+  const cards = preview.model.code.cards;
+  evidence.push(`kart poprawek: ${cards.length}, zmian bez objaśnienia: ${preview.model.code.unexplained.length}, propozycji: ${preview.model.code.proposals.length}`);
+  if (cards.length !== 1) {
+    ok = false;
+    evidence.push("oczekiwano dokładnie jednej karty");
+  }
+  const card = cards[0];
+  if (card) {
+    if (card.title === EXPLANATION_TITLE) evidence.push(`tytuł karty to ${JSON.stringify(card.title)} (z polecenia agenta)`);
+    else {
+      ok = false;
+      evidence.push(`tytuł karty ${JSON.stringify(card.title)} różni się od ${JSON.stringify(EXPLANATION_TITLE)}`);
+    }
+    const edit = card.changes.find((change) => change.tool === "Edit" && change.path.endsWith(observations.helloFile));
+    if (edit && edit.before !== null && edit.after !== null && edit.before.includes("hello") && edit.after.includes("greetings")) {
+      evidence.push(`zmiana ${edit.event_id} na karcie: ${edit.path}, przed=${JSON.stringify(edit.before)}, po=${JSON.stringify(edit.after)} (z narzędzia)`);
+    } else {
+      ok = false;
+      evidence.push(`karta nie ma zmiany z Edit dla ${observations.helloFile} z "hello" przed i "greetings" po`);
+    }
+    if (card.purpose.length > 0 && card.mechanism.length > 0) evidence.push(`objaśnienie: cel ${JSON.stringify(card.purpose)}, mechanizm ${JSON.stringify(card.mechanism)}`);
+    else {
+      ok = false;
+      evidence.push("karta bez celu lub mechanizmu");
+    }
+    notes.push(`zmian na karcie: ${card.changes.length}, materiałów: ${card.materials.length}, założenia: ${JSON.stringify(card.assumptions)}`);
+  }
+  if (preview.model.code.unexplained.length > 0) {
+    ok = false;
+    evidence.push(`zmiany bez objaśnienia: ${preview.model.code.unexplained.map((change) => `${change.path} (${change.tool})`).join(", ")}`);
+  }
+  const passed = preview.model.checks.items.find((item) => item.status === "passed");
+  if (passed) evidence.push(`sprawdzenie ${passed.id} w widoku sprawdzeń ze statusem passed${passed.current ? "" : " (na wcześniejszej wersji kodu)"}`);
+  else {
+    ok = false;
+    evidence.push("widok sprawdzeń nie ma sprawdzenia ze statusem passed");
+  }
+  notes.push(`elementów przebiegu: ${preview.model.timeline.length}, poleceń bez oceny: ${preview.model.checks.unassessed_commands.length}`);
+  return { question, verdict: ok ? "tak" : "nie", evidence, notes };
+}
+
+// --- stage 5: the guiding skill ---------------------------------------------------
+
+function evaluateAutonomy(observations: ExperimentObservations): Finding {
+  const question = "Czy agent sam zapisuje ustalenia w trakcie naturalnego zadania";
+  const evidence: string[] = [];
+  const notes: string[] = [];
+  const events = observations.thirdTaskEvents;
+  if (observations.thirdTaskId === null) {
+    return { question, verdict: "nie", evidence: ["sesja 3 nie otworzyła nowego zadania przez /devguide"], notes };
+  }
+  let ok = true;
+  evidence.push(`zadanie ${observations.thirdTaskId}: ${events.map((event) => event.kind).join(", ")}`);
+
+  const observation = events.find((event) => event.kind === "observation");
+  if (observation) evidence.push(`observation ${observation.id}`);
+  else {
+    ok = false;
+    evidence.push("brak observation");
+  }
+
+  const edited = events.find((event) => event.kind === "file_changed" && event.tool === "Edit" && event.path.endsWith(observations.noteFile));
+  if (edited && edited.kind === "file_changed" && (edited.before ?? "").includes("hello") && (edited.after ?? "").includes("greetings")) {
+    evidence.push(`file_changed ${edited.id} (Edit) dla ${edited.path}: before=${JSON.stringify(edited.before)}, after=${JSON.stringify(edited.after)}`);
+  } else {
+    ok = false;
+    evidence.push(`brak file_changed z Edit dla ${observations.noteFile} zmieniającego hello na greetings`);
+  }
+
+  const explained = events.find((event) => event.kind === "change_explained" && edited !== undefined && event.change_ids.includes(edited.id));
+  if (explained && explained.kind === "change_explained") evidence.push(`change_explained ${explained.id} (${JSON.stringify(explained.title)}) wskazuje tę zmianę`);
+  else {
+    ok = false;
+    const any = events.filter((event) => event.kind === "change_explained");
+    evidence.push(any.length > 0 ? `change_explained jest (${any.length}), ale nie wskazuje zmiany ${edited?.id ?? "(brak)"}` : "brak change_explained");
+  }
+
+  // Any passed check whose execution printed "greetings" counts; the task may hold other checks too.
+  const proven = events.flatMap((event) => {
+    if (event.kind !== "check" || event.status !== "passed") return [];
+    const execution = events.find((item) => item.id === event.execution_id);
+    return execution && execution.kind === "command_run" && execution.stdout.includes("greetings") ? [{ check: event, execution }] : [];
+  });
+  if (proven.length > 0) {
+    const { check: passed, execution } = proven[0]!;
+    evidence.push(`check ${passed.id} passed, wykonanie ${execution.id}: ${JSON.stringify(execution.command)} ze stdout zawierającym "greetings"`);
+  } else {
+    ok = false;
+    const checks = events.filter((event) => event.kind === "check");
+    evidence.push(checks.length > 0 ? `sprawdzenia: ${checks.map((check) => (check.kind === "check" ? `${check.id} ${check.status}${check.reason ? ` (${check.reason})` : ""}` : "")).join(", ")}, żadne nie jest passed z "greetings" w wyjściu` : "brak check");
+  }
+
+  const shellEdits = events.filter((event) => event.kind === "command_run" && /\bsed\b|printf|>\s*\S/.test(event.command));
+  if (shellEdits.length > 0) {
+    ok = false;
+    evidence.push(`UWAGA: ${shellEdits.length} polecenie(a) zmieniające plik przez powłokę zamiast Write/Edit`);
+  }
+  notes.push(`odpowiedź sesji 3 zaczyna się od: ${JSON.stringify(observations.thirdAnswer.slice(0, 80))}`);
+  return { question, verdict: ok ? "tak" : "nie", evidence, notes };
 }
 
 export function formatReport(findings: Finding[], header: string[]): string {

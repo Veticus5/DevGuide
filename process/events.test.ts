@@ -8,11 +8,13 @@ const COMPLETE: Record<string, Record<string, unknown>> = {
   task_started: { description: "fix the export" },
   user_prompt: { text: "yes" },
   session_resumed: { source: "resume" },
+  session_ended: { reason: "other" },
   observation: { text: "only the first page is fetched", materials: [{ label: "sample", content: "100 rows" }] },
   hypothesis: { text: "the page parameter is ignored" },
   hypothesis_resolved: { hypothesis_id: "abcd1234", outcome: "rejected", text: "the parameter is passed" },
   proposal: { text: "loop over pages" },
   change_prepared: { text: "add a loop", patch: null },
+  change_explained: { title: "Fetch every page", purpose: "export all rows", mechanism: "loop until the page is empty" },
   file_changed: { path: "src/export.ts", tool: "Edit" },
   command_run: { command: "npm test" },
   tool_failed: { tool: "Bash" },
@@ -34,6 +36,19 @@ describe("validateDraft", () => {
     const problems = validateDraft("decision", { question: "q" });
     assert.ok(problems.includes('missing required field "quote"'));
     assert.ok(problems.includes('missing required field "reading"'));
+  });
+
+  it("names the missing fields of an explanation and accepts optional ones empty", () => {
+    const problems = validateDraft("change_explained", { mechanism: "m" });
+    assert.ok(problems.includes('missing required field "title"'));
+    assert.ok(problems.includes('missing required field "purpose"'));
+    assert.deepEqual(validateDraft("change_explained", { ...COMPLETE["change_explained"], assumptions: "", change_ids: ["abcd1234"] }), []);
+    assert.match(validateDraft("change_explained", { ...COMPLETE["change_explained"], change_ids: "abcd1234" })[0]!, /"change_ids"/);
+  });
+
+  it("accepts a check with or without limits", () => {
+    assert.deepEqual(validateDraft("check", COMPLETE["check"]!), []);
+    assert.deepEqual(validateDraft("check", { ...COMPLETE["check"], limits: "synthetic data only" }), []);
   });
 
   it("rejects a claim outside the allowed set", () => {

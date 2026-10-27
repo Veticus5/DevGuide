@@ -2,7 +2,7 @@
 
 DevGuide is a toolset that lets a developer see and control what an AI coding agent does to their code: the problem being investigated, what is established versus assumed, the proposed fix, the changed code with examples, the decisions that need a human answer, and what was actually checked.
 
-Status: early. The repository, stack and project checks are in place; the integration with Claude Code (hooks, a minimal `/devguide` skill, blocking a tool call, resuming a session) is confirmed by a repeatable experiment; and a task event log records the course of a task: tool observations from the hooks, findings recorded by the agent through a CLI, with rules that keep "check passed" tied to a real run and a user decision tied to the user's words. There is no preview yet. See [docs/devguide-plan.md](docs/devguide-plan.md) for the product plan and stages, [docs/stack.md](docs/stack.md) for the stack and why it was chosen, [docs/claude-code-integration.md](docs/claude-code-integration.md) for what the integration can and cannot do, and [docs/task-event-log.md](docs/task-event-log.md) for the event format and the CLI.
+Status: early. The repository, stack and project checks are in place; the integration with Claude Code (hooks, a minimal `/devguide` skill, blocking a tool call, resuming a session) is confirmed by a repeatable experiment; a task event log records the course of a task: tool observations from the hooks, findings recorded by the agent through a CLI, with rules that keep "check passed" tied to a real run and a user decision tied to the user's words; a local preview (`npm run preview`) shows the task in the browser as it happens: the history of meaningful steps with each step's own view, the AI-changed code with before/after snippets and explanations, and the check results; and the `/devguide` skill guides the agent through investigating, planning, implementing, verifying and explaining, recording findings in the log as it goes. The user control point (approving a prepared fix before it is applied) is the next stage. See [docs/devguide-plan.md](docs/devguide-plan.md) for the product plan and stages, [docs/stack.md](docs/stack.md) for the stack and why it was chosen, [docs/claude-code-integration.md](docs/claude-code-integration.md) for what the integration can and cannot do, [docs/task-event-log.md](docs/task-event-log.md) for the event format and the CLI, and [docs/local-preview.md](docs/local-preview.md) for the preview.
 
 ## Prerequisites
 
@@ -34,6 +34,8 @@ Each check can also run on its own:
 | `npm run check:links` | Relative links in Markdown files point at existing files. |
 | `npm run check:specs` | OpenSpec changes and specs are valid. |
 
+`npm run check:test` also covers `ui/preview.js`, the only JavaScript file: its test imports it in Node and checks the HTML it renders.
+
 The same command runs in GitHub Actions on every push to `main` and every pull request ([.github/workflows/ci.yml](.github/workflows/ci.yml)).
 
 ## Integration experiment
@@ -44,11 +46,22 @@ One more command checks the integration with Claude Code end to end. It is not p
 npm run experiment
 ```
 
-It runs two short `claude -p` sessions with the DevGuide hooks loaded, then reports for each question of stages 2 and 3 of the plan whether the logs and the disk confirm it. Details and results: [docs/claude-code-integration.md](docs/claude-code-integration.md). To read the task the experiment recorded:
+It runs two short `claude -p` sessions with the DevGuide hooks loaded, starts the preview server on the recorded task, then reports for each question of stages 2, 3 and 4 of the plan whether the logs, the disk and the preview data confirm it. Details and results: [docs/claude-code-integration.md](docs/claude-code-integration.md). To read the task the experiment recorded, in the terminal or in the browser:
 
 ```bash
 DEVGUIDE_DIR=.devguide/experiment node process/cli.ts replay
+DEVGUIDE_DIR=.devguide/experiment npm run preview
 ```
+
+## Preview
+
+While the agent works on a task started with `/devguide`, a local page shows what it observed, assumed, changed and checked:
+
+```bash
+npm run preview
+```
+
+It prints `http://localhost:4310`, follows the current task and updates after every new event. Options and what each view shows: [docs/local-preview.md](docs/local-preview.md).
 
 ## Working on the project
 
@@ -77,8 +90,8 @@ openspec update          # refresh .claude/ commands after upgrading OpenSpec
 ## Repository layout
 
 - `agent/` - integration with Claude Code: hooks, the guiding skill, the user control point.
-- `process/` - local process: the task event log and its CLI, later the server behind the preview.
-- `ui/` - local preview.
+- `process/` - local process: the task event log and its CLI, the server behind the preview.
+- `ui/` - local preview page.
 - `demo/` - demonstration project with a real bug, used for the end-to-end example.
 - `scripts/` - project checks and helper scripts.
 - `docs/` - plan and documentation.

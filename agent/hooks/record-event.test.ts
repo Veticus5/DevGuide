@@ -251,6 +251,17 @@ describe("record-event hook and the task log", () => {
     assert.equal(last.after, "greetings");
   });
 
+  it("a SessionEnd with an open task appends session_ended and answers nothing", () => {
+    const task = startTask(dataDir, "t", "s1", NO_VERSION);
+    const run = runHook({ hook_event_name: "SessionEnd", session_id: "s1", cwd: dir, reason: "other" }, logFile, dir);
+    assert.equal(run.status, 0);
+    assert.equal(run.stdout.trim(), "");
+    const last = readEvents(task).at(-1)!;
+    assert.equal(last.kind, "session_ended");
+    assert.equal((last as { reason: string }).reason, "other");
+    assert.equal(run.entries[0]!.event, "SessionEnd");
+  });
+
   it("a SessionStart with an open task answers with additionalContext naming the task", () => {
     const task = startTask(dataDir, "t", "s1", NO_VERSION);
     const run = runHook({ hook_event_name: "SessionStart", session_id: "s2", cwd: dir, source: "resume" }, logFile, dir);

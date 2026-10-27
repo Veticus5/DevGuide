@@ -17,6 +17,22 @@ Rerun the experiment after upgrading Claude Code. It exits with 0 only when ever
 
 Since stage 3 the same run also asks the agent to record three findings through `node process/cli.ts record` and checks three more questions about the [task event log](task-event-log.md): findings reach the task, tool events reach the task, and the agent receives the task context after a resume. Rerun on 2026-10-21 with the same Claude Code 2.1.300: eight questions confirmed, 21 raw log entries, 11 task events, session 1 17.2 s and session 2 1.9 s, about 0.45 USD in total (the extra steps are extra model turns; the hook itself still costs about 120 ms per tool call).
 
+Since stage 4 the run asks the agent to record one more finding, an explanation of the `hello.txt` change (`change_explained`), then starts the [preview](local-preview.md) server on a free port and asks it for `/api/preview`. The ninth question is whether the fix card carries the tool's before/after and the agent's title. Result of the run with this change: see the table below.
+
+Since stage 5 the run adds a third session: a natural task ("create note.txt with hello there, change hello to greetings, verify the file contains greetings") with no DevGuide command named, so only the rewritten skill can make the agent record findings. The tenth question is whether it did. It took three runs on 2026-10-27, each teaching something about the agent rather than about the hooks:
+
+| Run (stage 5) | Result |
+| --- | --- |
+| 1 | 9 of 10. Session 3 recorded everything, but the `SessionStart` context of a fresh session handed it the full description of the task left open by session 1 (a nine-step list), and the agent executed that list again before its own task. The evaluator also looked only at the first passed check. Both fixed: a fresh session (`source: startup`) now gets a clipped notice that an earlier task is open and an instruction not to continue it; the evaluator accepts any passed check with the expected output. |
+| 2 | 9 of 10. The agent reported that it had run `grep -n greetings …` and seen `1:greetings there`; the raw log holds no such Bash call. The check was stored as `unverified` (`no_execution`): the log caught a fabricated verification. Fixed by feedback, not by force: `record` now prints the log's decision (`status=unverified reason=no_execution: …`) and the skill tells the agent to read it, run the command and record again. |
+| 3 | 10 of 10 (exit code 0). Session 3: 16.1 s, 0.12 USD; observation, `Write` and `Edit` of `note.txt` with one explanation covering both, `grep -c greetings …; cat …` run through Bash and recorded as a passed check with the quote from its output. Whole run 0.38 USD. |
+
+| Run (stage 4) | Result |
+| --- | --- |
+| Date, Claude Code, system | 2026-10-21, Claude Code 2.1.300, Windows 11 (win32 x64), Node 24.20.0, model `sonnet` |
+| Questions confirmed | 9 of 9 (exit code 0); 23 raw log entries, 12 task events, 1 fix card with 2 changes (the `Write` that created `hello.txt` and the `Edit`), 0 unexplained changes |
+| Cost and time | 0.25 USD in total (session 1 0.12 USD and 17.7 s, session 2 0.14 USD and 1.9 s); the preview server answered `/api/preview` with 200 on a free port |
+
 ## The five questions
 
 | Question from the plan | Answer | Evidence in the run | Limits |
@@ -61,7 +77,8 @@ Common to every event: `session_id`, `transcript_path`, `cwd`, `scratchpad_dir`,
 ## Consequences for the next stages
 
 - Stage 3 (event log, done): takes tool observations straight from `PostToolUse`: paths and patches for file changes, `stdout` and `stderr` for commands. It treats the absence of an exit code as a fact: `exit_code` is recorded as unknown, and "the command succeeded" needs a check with evidence from the output. See [task-event-log.md](task-event-log.md).
-- Stage 5 (guiding skill) can rely on `/devguide` as the single entry point and on `UserPromptSubmit` to mark the start without the agent's cooperation. Structured findings from the skill still need a channel of their own; a hook cannot see the agent's reasoning, only `last_assistant_message` at the end of a turn.
+- Stage 4 (preview, done): reads the task log and nothing else, so it depends on Claude Code only through the hook. The experiment starts the preview server on a free port and checks `/api/preview`: the fix card for `hello.txt` carries the `Edit` tool's before/after and the title the agent recorded with `change_explained`. See [local-preview.md](local-preview.md).
+- Stage 5 (guiding skill, done): `/devguide` is the single entry point and `UserPromptSubmit` marks the start without the agent's cooperation. The skill itself is the channel for structured findings: it tells the agent when to run `node process/cli.ts record …` and to change files only with Write and Edit, because a hook cannot see the agent's reasoning, only its tool calls and `last_assistant_message`. The `SessionStart` context repeats the rules for a resumed session. Session 3 of the experiment gives the agent a natural task without naming any DevGuide command and checks that it recorded an observation, an explanation tied to an `Edit` and a passed check on its own: confirmed on 2026-10-27 (run 3 of 3, see the stage 5 table above).
 - Stage 6 (control point) can enforce "do not apply before approval" with a `PreToolUse` deny on `Write`, `Edit` and file-writing `Bash` calls, as long as the condition is expressed over `tool_input`. The rule must be fail-closed (`onFailure: "block"`) and that needs its own test.
 - Resuming after an interruption is Claude Code's job; DevGuide only has to record the session id and recognise `source: resume`.
 

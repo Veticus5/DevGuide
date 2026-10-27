@@ -2,7 +2,9 @@
 // mode with the DevGuide hooks loaded, asks it to do a fixed list of actions
 // (file changes, commands, findings recorded through the CLI), then checks
 // the activity log, the task log and the disk for proof that each question
-// has an answer: the five of stage 2 and three about the task log of stage 3.
+// has an answer: the five of stage 2, three about the task log of stage 3
+// and one about the preview of stage 4 (the server is started on a free
+// port and asked for the same data the page fetches).
 // Requires an installed and logged-in Claude Code; it spends tokens, so it
 // is not part of `npm run check`.
 //
@@ -15,12 +17,13 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { startPreviewServer } from "../../process/server.ts";
 import { currentTask, readEvents } from "../../process/task-log.ts";
 import type { LogEntry } from "../hooks/record-event.ts";
-import { allPassed, evaluate, formatReport, type ExperimentObservations } from "./evaluate.ts";
+import { EXPLANATION_TITLE, allPassed, evaluate, formatReport, type ExperimentObservations, type PreviewData } from "./evaluate.ts";
 
 const REPO_ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const EXPERIMENT_DIR = join(REPO_ROOT, ".devguide", "experiment");
@@ -30,6 +33,7 @@ const REPORT_FILE = join(EXPERIMENT_DIR, "report.txt");
 const SETTINGS_FILE = join("agent", "experiment", "settings.json");
 const HELLO_FILE = "hello.txt";
 const BLOCKED_FILE = "blocked.txt";
+const NOTE_FILE = "note.txt";
 
 interface ClaudeRun {
   exitCode: number | null;
@@ -80,6 +84,27 @@ function runClaude(prompt: string, args: string[], label: string): ClaudeRun {
   };
 }
 
+/** The natural task of session 3: no DevGuide commands are named; the skill alone has to make the agent record findings. */
+function naturalPrompt(): string {
+  const note = join(WORK_DIR, NOTE_FILE);
+  return `/devguide In the file ${note} (create it) write the text "hello there", then change the word hello to greetings, then verify that the file contains greetings.`;
+}
+
+/** Starts the preview server on the experiment's data directory pinned to one task, fetches what the page would fetch, and stops it. */
+async function fetchPreview(taskId: string | null): Promise<{ url: string; status: number | null; data: PreviewData | null }> {
+  const server = await startPreviewServer({ dataDir: EXPERIMENT_DIR, port: 0, taskId });
+  try {
+    const response = await fetch(`${server.url}/api/preview`);
+    const data = response.ok ? ((await response.json()) as PreviewData) : null;
+    return { url: server.url, status: response.status, data };
+  } catch (error) {
+    process.stderr.write(`experiment: preview server did not answer: ${(error as Error).message}\n`);
+    return { url: server.url, status: null, data: null };
+  } finally {
+    await server.close();
+  }
+}
+
 function readLog(): LogEntry[] {
   if (!existsSync(LOG_FILE)) return [];
   return readFileSync(LOG_FILE, "utf8")
@@ -91,6 +116,8 @@ function readLog(): LogEntry[] {
 function taskPrompt(codeWord: string): string {
   const hello = join(WORK_DIR, HELLO_FILE);
   const blocked = join(WORK_DIR, BLOCKED_FILE);
+  // The hook records paths relative to the session's working directory with "/" separators; the explanation must name the file the same way.
+  const helloRelative = relative(REPO_ROOT, hello).replaceAll("\\", "/");
   return [
     `/devguide Integration experiment, code word ${codeWord}. Do these steps in order, one tool call each, and do not skip any:`,
     `1. Use the Write tool to create the file ${hello} with exactly this content: hello from devguide`,
@@ -100,8 +127,9 @@ function taskPrompt(codeWord: string): string {
     `   If this step is refused, do not retry it and do not create that file in any other way.`,
     `5. Use the Bash tool to run exactly: node process/cli.ts record observation --text "hello.txt now says greetings" --files "${HELLO_FILE}" --material "sample=greetings from devguide"`,
     `6. Use the Bash tool to run exactly: node process/cli.ts record hypothesis --text "the hooks record every step of this experiment"`,
-    `7. Use the Bash tool to run exactly: node process/cli.ts record check --what "echo printed the marker" --expected "devguide-ok" --command "echo devguide-ok" --evidence "devguide-ok" --claimed passed`,
-    `8. Remember the code word ${codeWord}; you will be asked for it in a later session.`,
+    `7. Use the Bash tool to run exactly: node process/cli.ts record change_explained --title "${EXPLANATION_TITLE}" --purpose "The file greets with a different word" --mechanism "The word hello is replaced by greetings" --assumptions "Only this one file changes" --files "${helloRelative}" --material "example=hello from devguide -> greetings from devguide"`,
+    `8. Use the Bash tool to run exactly: node process/cli.ts record check --what "echo printed the marker" --expected "devguide-ok" --command "echo devguide-ok" --evidence "devguide-ok" --claimed passed`,
+    `9. Remember the code word ${codeWord}; you will be asked for it in a later session.`,
     `Finally report, one line per step, what happened, including any refusal.`,
   ].join("\n");
 }
@@ -131,7 +159,7 @@ export async function main(): Promise<number> {
   const sessionId = randomUUID();
   const codeWord = `tulip-${randomUUID().slice(0, 8)}`;
   const header = [
-    `DevGuide - eksperyment integracji (etapy 2 i 3)`,
+    `DevGuide - eksperyment integracji (etapy 2, 3, 4 i 5)`,
     `Data: ${new Date().toISOString()}`,
     `Claude Code: ${version}`,
     `System: ${process.platform} ${process.arch}, Node ${process.version}`,
@@ -163,8 +191,30 @@ export async function main(): Promise<number> {
   );
   process.stdout.write(`  exit ${second.exitCode}, session ${second.sessionId}, ${second.durationMs} ms, koszt ${second.costUsd ?? "?"} USD\n`);
 
-  const helloPath = join(WORK_DIR, HELLO_FILE);
   const task = currentTask(EXPERIMENT_DIR);
+  process.stdout.write(`Podgląd (serwer na porcie 0, pobranie /api/preview dla zadania sesji 1)...\n`);
+  const preview = await fetchPreview(task?.record.id ?? null);
+  process.stdout.write(`  ${preview.url} odpowiedział ${preview.status ?? "brak odpowiedzi"}\n`);
+
+  process.stdout.write(`Sesja 3 (naturalne zadanie, bez wymieniania poleceń DevGuide)...\n`);
+  const third = runClaude(
+    naturalPrompt(),
+    [
+      "--session-id", randomUUID(),
+      "--model", model,
+      "--permission-mode", "acceptEdits",
+      "--permission-prompts", "none",
+      "--allowedTools", "Write,Edit,Read,Bash(cat *),Bash(type *),Bash(grep *),Bash(findstr *),Bash(ls *),Bash(echo *),Bash(node process/cli.ts *)",
+      "--max-turns", "25",
+      "--max-budget-usd", "2",
+    ],
+    "session-3",
+  );
+  process.stdout.write(`  exit ${third.exitCode}, session ${third.sessionId}, ${third.durationMs} ms, koszt ${third.costUsd ?? "?"} USD\n`);
+  const thirdTask = currentTask(EXPERIMENT_DIR);
+  const thirdIsNew = thirdTask !== null && thirdTask.record.id !== task?.record.id;
+
+  const helloPath = join(WORK_DIR, HELLO_FILE);
   const observations: ExperimentObservations = {
     sessionId,
     codeWord,
@@ -178,18 +228,27 @@ export async function main(): Promise<number> {
     entries: readLog(),
     taskId: task?.record.id ?? null,
     taskEvents: task ? readEvents(task) : [],
+    preview: preview.data,
+    noteFile: NOTE_FILE,
+    thirdAnswer: third.result,
+    thirdTaskId: thirdIsNew ? thirdTask.record.id : null,
+    thirdTaskEvents: thirdIsNew ? readEvents(thirdTask) : [],
   };
   const findings = evaluate(observations);
 
   header.push(
-    `Koszt: sesja 1 ${first.costUsd ?? "?"} USD, sesja 2 ${second.costUsd ?? "?"} USD`,
-    `Czas: sesja 1 ${first.durationMs} ms, sesja 2 ${second.durationMs} ms (etap 2 bez dziennika zadania: 9275 ms i 1428 ms)`,
+    `Koszt: sesja 1 ${first.costUsd ?? "?"} USD, sesja 2 ${second.costUsd ?? "?"} USD, sesja 3 ${third.costUsd ?? "?"} USD`,
+    `Czas: sesja 1 ${first.durationMs} ms, sesja 2 ${second.durationMs} ms, sesja 3 ${third.durationMs} ms (etap 2 bez dziennika zadania: 9275 ms i 1428 ms)`,
     `Wpisy w surowym dzienniku: ${observations.entries.length}`,
     `Zadanie: ${observations.taskId ?? "brak"}, zdarzeń w zadaniu: ${observations.taskEvents.length}`,
+    `Podgląd: ${preview.url} odpowiedział ${preview.status ?? "brak odpowiedzi"}, kart poprawek: ${preview.data?.model?.code.cards.length ?? "?"}, zmian bez objaśnienia: ${preview.data?.model?.code.unexplained.length ?? "?"}`,
     `permission_denials sesji 1: ${JSON.stringify(first.permissionDenials ?? null).slice(0, 300)}`,
     `Odpowiedź sesji 1:`,
     ...first.result.split("\n").map((line) => `  | ${line}`),
     `Odpowiedź sesji 2: ${JSON.stringify(second.result)}`,
+    `Zadanie sesji 3: ${observations.thirdTaskId ?? "brak (nie otwarto nowego zadania)"}, zdarzenia: ${observations.thirdTaskEvents.map((event) => event.kind).join(", ") || "brak"}`,
+    `Odpowiedź sesji 3:`,
+    ...third.result.split("\n").map((line) => `  | ${line}`),
   );
   const report = formatReport(findings, header);
   writeFileSync(REPORT_FILE, `${report}\n`, "utf8");

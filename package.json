@@ -13,6 +13,7 @@
     "check:test": "node --test \"{agent,process,ui,demo,scripts}/**/*.test.ts\"",
     "check:links": "node scripts/check-links.ts",
     "check:specs": "openspec validate --all",
+    "preview": "node process/server.ts",
     "experiment": "node agent/experiment/run.ts"
   },
   "license": "UNLICENSED",
