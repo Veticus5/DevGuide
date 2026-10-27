@@ -9,6 +9,7 @@ import { isAbsolute, relative } from "node:path";
 
 import { UNKNOWN_CODE_VERSION, readCodeVersion } from "./code-version.ts";
 import {
+  AGENT_KINDS,
   ORIGIN_OF_KIND,
   isAgentKind,
   isStringArray,
@@ -16,12 +17,14 @@ import {
   validateDraft,
   type AgentKind,
   type CheckClaim,
+  type ChangeExplainedEvent,
   type CheckEvent,
   type CodeVersion,
   type CommandRunEvent,
   type DecisionEvent,
   type Draft,
   type EventEnvelope,
+  type FileChangedEvent,
   type HypothesisOutcome,
   type Material,
   type TaskEvent,
@@ -243,6 +246,9 @@ export function recordHookEvent(input: HookInputLike, dataDir: string, deps?: Ta
       created = { ...build([]), kind: "session_resumed", origin: "devguide", source: input.source ?? "unknown" };
       break;
     }
+    case "SessionEnd":
+      created = { ...build([]), kind: "session_ended", origin: "devguide", reason: typeof input["reason"] === "string" ? input["reason"] : "unknown" };
+      break;
     default:
       break;
   }
@@ -251,7 +257,7 @@ export function recordHookEvent(input: HookInputLike, dataDir: string, deps?: Ta
   noteSession(task, sessionId);
   appendEvent(task, created);
   if (event === "SessionStart") {
-    context = sessionContext(summarize(task.record, readEvents(task)));
+    context = sessionContext(summarize(task.record, readEvents(task)), input.source ?? "unknown");
   }
   return { events: [created], context };
 }
@@ -332,7 +338,7 @@ export function displayPath(cwd: string | null, path: string): string {
  */
 export function appendAgentEvent(task: OpenTask, kind: string, draft: Draft, deps?: TaskLogDeps): TaskEvent {
   if (!isAgentKind(kind)) {
-    throw new TaskLogError(`"${kind}" is not a kind the agent can record (use one of: observation, hypothesis, hypothesis_resolved, proposal, change_prepared, decision, check)`);
+    throw new TaskLogError(`"${kind}" is not a kind the agent can record (use one of: ${AGENT_KINDS.join(", ")})`);
   }
   const problems = validateDraft(kind, draft);
   if (problems.length > 0) throw new TaskLogError(problems.join("; "));
@@ -367,6 +373,13 @@ export function appendAgentEvent(task: OpenTask, kind: string, draft: Draft, dep
     case "change_prepared":
       event = { ...base, kind: "change_prepared", text: text("text"), patch: typeof draft["patch"] === "string" ? draft["patch"] : null, materials };
       break;
+    case "change_explained":
+      event = resolveExplanation(
+        { ...base, kind: "change_explained", title: text("title"), purpose: text("purpose"), mechanism: text("mechanism"), assumptions: text("assumptions"), materials, change_ids: [] },
+        isStringArray(draft["change_ids"]) ? draft["change_ids"] : null,
+        existing,
+      );
+      break;
     case "decision":
       event = resolveDecision({ ...base, kind: "decision", question: text("question"), quote: text("quote"), reading: text("reading"), confirmed: false, prompt_event_id: null }, existing);
       break;
@@ -383,6 +396,7 @@ export function appendAgentEvent(task: OpenTask, kind: string, draft: Draft, dep
           status: "unverified",
           execution_id: null,
           reason: null,
+          limits: typeof draft["limits"] === "string" && draft["limits"].trim().length > 0 ? draft["limits"] : null,
         },
         typeof draft["execution_id"] === "string" ? draft["execution_id"] : null,
         existing,
@@ -411,6 +425,27 @@ export function resolveCheck(check: CheckEvent, executionId: string | null, even
     return { ...check, status: "unverified", execution_id: execution.id, reason: "evidence_not_found" };
   }
   return { ...check, status: check.claimed, execution_id: execution.id, reason: null };
+}
+
+/**
+ * Ties an explanation to the file changes it covers: the ids given explicitly
+ * (each must be a `file_changed` of this task), or else every earlier change
+ * of one of its files that no earlier explanation covers. No match is not an
+ * error: the explanation is kept with an empty list and shown as such.
+ */
+export function resolveExplanation(explanation: ChangeExplainedEvent, changeIds: string[] | null, events: TaskEvent[]): ChangeExplainedEvent {
+  const changes = events.filter((item): item is FileChangedEvent => item.kind === "file_changed");
+  if (changeIds !== null) {
+    for (const id of changeIds) {
+      if (!changes.some((change) => change.id === id)) {
+        throw new TaskLogError(`no file change with id "${id}" in task ${explanation.task_id}`);
+      }
+    }
+    return { ...explanation, change_ids: [...new Set(changeIds)] };
+  }
+  const covered = new Set(events.flatMap((item) => (item.kind === "change_explained" ? item.change_ids : [])));
+  const matched = changes.filter((change) => explanation.files.includes(change.path) && !covered.has(change.id));
+  return { ...explanation, change_ids: matched.map((change) => change.id) };
 }
 
 /** Marks the decision confirmed when the quote occurs in what the user actually wrote. */

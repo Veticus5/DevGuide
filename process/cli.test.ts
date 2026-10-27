@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 
 import { draftFromOptions } from "./cli.ts";
 import type { TaskEvent } from "./events.ts";
-import { startTask } from "./task-log.ts";
+import { readEvents, recordHookEvent, startTask } from "./task-log.ts";
 import type { TaskSummary } from "./replay.ts";
 
 const SCRIPT = fileURLToPath(new URL("./cli.ts", import.meta.url));
@@ -87,12 +87,53 @@ describe("cli (as a child process)", () => {
     startTask(dir, "t", "s", VERSION);
     const run = cli("record", "check", "--what", "all rows exported", "--expected", "250", "--command", "npm test", "--evidence", "250", "--claimed", "passed");
     assert.equal(run.status, 0, run.stderr);
+    assert.match(run.stdout, /^recorded check [0-9a-f]{8} status=unverified reason=no_execution: no recorded run of exactly this command/);
     const status = cli("status").stdout;
     assert.match(status, /\[niepotwierdzone\] all rows exported/);
     assert.match(status, /powód: brak zarejestrowanego wykonania polecenia/);
     const json = JSON.parse(cli("status", "--json").stdout) as TaskSummary;
     assert.equal(json.checks[0]!.status, "unverified");
     assert.equal(json.checks[0]!.reason, "no_execution");
+  });
+
+  it("record change_explained without a title exits 1 naming the field", () => {
+    startTask(dir, "t", "s", VERSION);
+    const run = cli("record", "change_explained", "--purpose", "p", "--mechanism", "m");
+    assert.equal(run.status, 1);
+    assert.match(run.stderr, /missing required field "title"/);
+    assert.equal(cli("replay", "--json").stdout.includes('"change_explained"'), false);
+  });
+
+  it("records an explanation tied to a recorded file change and a check with limits", () => {
+    const task = startTask(dir, "t", "s", VERSION);
+    const change = recordHookEvent(
+      {
+        hook_event_name: "PostToolUse",
+        session_id: "s",
+        cwd: dir,
+        tool_name: "Edit",
+        tool_input: { file_path: join(dir, "hello.txt"), old_string: "hello", new_string: "greetings" },
+        tool_response: { filePath: join(dir, "hello.txt"), oldString: "hello", newString: "greetings", originalFile: "hello\n", structuredPatch: [] },
+      },
+      dir,
+    ).events[0]!;
+    const run = cli("record", "change_explained", "--title", "Greeting word", "--purpose", "say greetings", "--mechanism", "replace the word", "--assumptions", "one file", "--files", "hello.txt", "--material", "example=hello -> greetings");
+    assert.equal(run.status, 0, run.stderr);
+    const id = run.stdout.trim().split(" ")[2]!;
+    assert.match(run.stdout, new RegExp(`^recorded change_explained ${id} changes=${change.id}\\n$`));
+    const replay = JSON.parse(cli("replay", "--json").stdout) as { events: TaskEvent[]; model: { code: { cards: { id: string; changes: { event_id: string }[] }[] } } };
+    const event = replay.events.find((item) => item.id === id) as { change_ids: string[]; assumptions: string };
+    assert.deepEqual(event.change_ids, [change.id]);
+    assert.equal(event.assumptions, "one file");
+    assert.equal(replay.model.code.cards[0]!.changes[0]!.event_id, change.id);
+    assert.match(cli("replay").stdout, /Objaśniono poprawkę: Greeting word \(zmiany plików: 1 \[ilustracje od AI: 1\]\)/);
+
+    const check = cli("record", "check", "--what", "w", "--expected", "e", "--command", "npm test", "--evidence", "x", "--claimed", "passed", "--limits", "only a test");
+    assert.equal(check.status, 0, check.stderr);
+    assert.match(check.stdout, /status=unverified reason=no_execution/);
+    const events = JSON.parse(cli("replay", "--json").stdout).events as { kind: string; limits?: string | null }[];
+    assert.equal(events.findLast((item) => item.kind === "check")!.limits, "only a test");
+    assert.equal(readEvents(task).length, 4);
   });
 
   it("replay and status without a task exit 0 with a notice", () => {
@@ -122,13 +163,15 @@ describe("cli (as a child process)", () => {
 
 describe("draftFromOptions", () => {
   it("maps options to draft fields", () => {
-    const draft = draftFromOptions({ hypothesis: "abcd", outcome: "rejected", text: "why", execution: "e1", files: "a, b,", material: ["k=v=w"] });
+    const draft = draftFromOptions({ hypothesis: "abcd", outcome: "rejected", text: "why", execution: "e1", files: "a, b,", material: ["k=v=w"], changes: "e2, e3", limits: "l" });
     assert.deepEqual(draft, {
       hypothesis_id: "abcd",
       outcome: "rejected",
       text: "why",
       execution_id: "e1",
+      limits: "l",
       files: ["a", "b"],
+      change_ids: ["e2", "e3"],
       materials: [{ label: "k", content: "v=w", nature: "illustration" }],
     });
   });

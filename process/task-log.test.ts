@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 
-import type { CheckEvent, CodeVersion, CommandRunEvent, DecisionEvent, FileChangedEvent, TaskEvent } from "./events.ts";
+import type { ChangeExplainedEvent, CheckEvent, CodeVersion, CommandRunEvent, DecisionEvent, FileChangedEvent, TaskEvent } from "./events.ts";
 import { currentTaskFile, taskEventsFile, taskFile } from "./paths.ts";
 import {
   TaskLogError,
@@ -110,7 +110,20 @@ describe("recordHookEvent", () => {
     assert.deepEqual(result, { events: [], context: null });
     const start = hook({ hook_event_name: "SessionStart", source: "startup" });
     assert.deepEqual(start, { events: [], context: null });
+    const end = hook({ hook_event_name: "SessionEnd", reason: "other" });
+    assert.deepEqual(end, { events: [], context: null });
     assert.equal(existsSync(join(dir, "tasks")), false);
+  });
+
+  it("records the end of a session in the open task with its reason", () => {
+    const task = startTask(dir, "task", "session-1", VERSION_A);
+    const result = hook({ hook_event_name: "SessionEnd", session_id: "session-1", reason: "other" });
+    assert.equal(result.events[0]!.kind, "session_ended");
+    assert.equal((result.events[0] as { reason: string }).reason, "other");
+    assert.equal(result.context, null);
+    const last = readEvents(task).at(-1)!;
+    assert.equal(last.kind, "session_ended");
+    assert.equal(last.origin, "devguide");
   });
 
   describe("with an open task", () => {
@@ -341,6 +354,71 @@ describe("appendAgentEvent", () => {
   it("resolving an unknown hypothesis fails without writing", () => {
     assert.throws(() => appendAgentEvent(task, "hypothesis_resolved", { hypothesis_id: "nope", outcome: "confirmed", text: "x" }, deps()), /no hypothesis with id "nope"/);
     assert.equal(readEvents(task).length, 1);
+  });
+
+  function editFile(path: string, before: string, after: string): FileChangedEvent {
+    const result = recordHookEvent(
+      {
+        hook_event_name: "PostToolUse",
+        session_id: "session-1",
+        cwd: dir,
+        tool_name: "Edit",
+        tool_input: { file_path: join(dir, path), old_string: before, new_string: after },
+        tool_response: { filePath: join(dir, path), oldString: before, newString: after, originalFile: before, structuredPatch: [] },
+      },
+      dir,
+      deps(VERSION_B),
+    );
+    return result.events[0] as FileChangedEvent;
+  }
+
+  it("explanation is tied to the earlier change of its file", () => {
+    const change = editFile("src/export.ts", "page = 1", "for (page...)");
+    const explained = appendAgentEvent(task, "change_explained", { title: "Fetch every page", purpose: "export all rows", mechanism: "loop until empty", files: ["src/export.ts"] }, deps()) as ChangeExplainedEvent;
+    assert.equal(explained.origin, "agent");
+    assert.deepEqual(explained.change_ids, [change.id]);
+    assert.equal(explained.assumptions, "");
+    assert.deepEqual(explained.materials, []);
+  });
+
+  it("a second explanation of the same file covers only the later change", () => {
+    const first = editFile("src/export.ts", "a", "b");
+    appendAgentEvent(task, "change_explained", { title: "one", purpose: "p", mechanism: "m", files: ["src/export.ts"] }, deps());
+    const second = editFile("src/export.ts", "b", "c");
+    const explained = appendAgentEvent(task, "change_explained", { title: "two", purpose: "p", mechanism: "m", files: ["src/export.ts"] }, deps()) as ChangeExplainedEvent;
+    assert.deepEqual(explained.change_ids, [second.id]);
+    assert.notEqual(explained.change_ids[0], first.id);
+  });
+
+  it("explicit change ids are used as given and an unknown one fails without writing", () => {
+    const a = editFile("src/a.ts", "1", "2");
+    const b = editFile("src/b.ts", "1", "2");
+    const explained = appendAgentEvent(task, "change_explained", { title: "both", purpose: "p", mechanism: "m", change_ids: [a.id, b.id] }, deps()) as ChangeExplainedEvent;
+    assert.deepEqual(explained.change_ids, [a.id, b.id]);
+    const count = readEvents(task).length;
+    assert.throws(() => appendAgentEvent(task, "change_explained", { title: "x", purpose: "p", mechanism: "m", change_ids: ["nope"] }, deps()), /no file change with id "nope"/);
+    assert.equal(readEvents(task).length, count);
+  });
+
+  it("explanation with no matching change is recorded with an empty list", () => {
+    const explained = appendAgentEvent(task, "change_explained", { title: "x", purpose: "p", mechanism: "m", files: ["src/missing.ts"], assumptions: "none" }, deps()) as ChangeExplainedEvent;
+    assert.deepEqual(explained.change_ids, []);
+    assert.equal(explained.assumptions, "none");
+    assert.equal(readEvents(task).at(-1)!.id, explained.id);
+  });
+
+  it("explanation without a title or purpose fails without writing", () => {
+    assert.throws(() => appendAgentEvent(task, "change_explained", { mechanism: "m" }, deps()), (error: unknown) => error instanceof TaskLogError && /"title"/.test(error.message) && /"purpose"/.test(error.message));
+    assert.equal(readEvents(task).length, 1);
+  });
+
+  it("check keeps the limits given by the agent and null otherwise", () => {
+    runCommand("npm test", "250 records written\n");
+    const limited = appendAgentEvent(task, "check", { what: "x", expected: "y", command: "npm test", evidence: "250", claimed: "passed", limits: "synthetic data, no filters" }, deps()) as CheckEvent;
+    assert.equal(limited.status, "passed");
+    assert.equal(limited.limits, "synthetic data, no filters");
+    const plain = appendAgentEvent(task, "check", { what: "x", expected: "y", command: "npm test", evidence: "250", claimed: "passed" }, deps()) as CheckEvent;
+    assert.equal(plain.limits, null);
   });
 
   it("code version of a later event differs after a change in the working tree", () => {

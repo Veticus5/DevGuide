@@ -31,8 +31,8 @@ function course(): TaskEvent[] {
   const rejected = event("hypothesis_resolved", { origin: "agent", hypothesis_id: hypothesis.id, outcome: "rejected", text: "the parameter is passed correctly" });
   const second = event("hypothesis", { origin: "agent", text: "the loop stops after the first page" });
   const run = event("command_run", { origin: "tool", command: "npm test", stdout: "250 records written\n", stderr: "", interrupted: false, exit_code: null });
-  const check = event("check", { origin: "agent", what: "all 250 rows exported", expected: "250", command: "npm test", evidence: "250 records written", claimed: "passed", status: "passed", execution_id: run.id, reason: null });
-  const unverified = event("check", { origin: "agent", what: "filters apply on every page", expected: "x", command: "npm run filters", evidence: "ok", claimed: "passed", status: "unverified", execution_id: null, reason: "no_execution" });
+  const check = event("check", { origin: "agent", what: "all 250 rows exported", expected: "250", command: "npm test", evidence: "250 records written", claimed: "passed", status: "passed", execution_id: run.id, reason: null, limits: null });
+  const unverified = event("check", { origin: "agent", what: "filters apply on every page", expected: "x", command: "npm run filters", evidence: "ok", claimed: "passed", status: "unverified", execution_id: null, reason: "no_execution", limits: null });
   const decision = event("decision", { origin: "agent", question: "apply?", quote: "go", reading: "apply the fix", confirmed: false, prompt_event_id: null });
   return [started, observation, hypothesis, rejected, second, run, check, unverified, decision];
 }
@@ -125,10 +125,24 @@ describe("text output", () => {
     assert.equal(describeEvent(event("file_changed", { origin: "tool", path: "a.txt", created: false, before: "x", after: "y", patch: null, tool: "Edit" })), "Zmieniono plik a.txt");
   });
 
+  it("describeEvent names an explanation with its title and the number of changes", () => {
+    const explained = event("change_explained", { origin: "agent", title: "Fetch every page", purpose: "p", mechanism: "m", assumptions: "", materials: [], change_ids: ["e1", "e2"] });
+    assert.equal(describeEvent(explained), "Objaśniono poprawkę: Fetch every page (zmiany plików: 2)");
+  });
+
   it("session context names the task and the replay command", () => {
     const text = sessionContext(summarize(TASK, course()));
     assert.match(text, /^DevGuide task 20261021-1000-ab12 is open: Export fetches only page one\n/);
     assert.match(text, /hypotheses 2 \(1 open\); checks 2 \(1 passed on the current code, 1 unverified\); decisions 1/);
     assert.match(text, /node process\/cli\.ts replay/);
+    assert.match(text, /record observation\|hypothesis\|proposal\|change_explained\|check/);
+    assert.match(text, /only with Write and Edit/);
+    assert.match(text, /exact command you ran and a quote from its output/);
+    const fresh = sessionContext(summarize({ ...TASK, description: "x".repeat(300) }, course()), "startup");
+    assert.match(fresh, /^A DevGuide task from an earlier session is still open: 20261021-1000-ab12: x{159}…\n/);
+    assert.match(fresh, /Do not continue that task unless the user asks/);
+    assert.doesNotMatch(fresh, /is open: x{300}/);
+    assert.match(fresh, /record observation\|hypothesis/);
+    assert.match(sessionContext(summarize(TASK, course()), "compact"), /^DevGuide task .* is open/);
   });
 });

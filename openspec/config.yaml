@@ -16,10 +16,31 @@ context: |
   (Etap 3, process/): jeden plik JSONL na zadanie, zdarzenia z narzędzi przez
   hook i ustalenia agenta przez `node process/cli.ts record`, reguły statusu
   sprawdzenia (passed tylko z zarejestrowanym wykonaniem i dowodem z wyjścia)
-  i potwierdzenia decyzji (cytat z wypowiedzi użytkownika), odczyt przez
-  `replay`/`status`. Format i polecenia: docs/task-event-log.md. Nie istnieje
-  jeszcze podgląd. Nie zakładaj, że cokolwiek działa, dopóki nie zostało
-  zaimplementowane i sprawdzone w tym repo.
+  i potwierdzenia decyzji (cytat z wypowiedzi użytkownika), objaśnienie
+  poprawki (`change_explained`) wiązane przy zapisie ze zmianami plików,
+  odczyt przez `replay`/`status`. Format i polecenia: docs/task-event-log.md.
+  Lokalny podgląd (Etap 4): `npm run preview` uruchamia serwer
+  (process/server.ts) na localhost, model widoków liczy process/preview-model.ts,
+  strona w ui/ (index.html, preview.css, preview.js - jedyny plik JS, testowany
+  w Node) pokazuje trzy widoki (przebieg, kod AI, wyniki sprawdzeń) i aktualizuje
+  się po każdym zdarzeniu przez Server-Sent Events. Przebieg jest według makiety
+  produktu: historia znaczących kroków po lewej (zgłoszenie, ustalenia agenta,
+  zmiany w kodzie, sprawdzenia, decyzje), widok wybranego kroku po prawej z
+  krótkim wyjaśnieniem i tylko potrzebnym konkretem; polecenia, wypowiedzi
+  agenta, czasy i identyfikatory są wyłącznie w rozwijanych źródłach kroku;
+  zadanie bez ustaleń dostaje rzeczowe kroki odtworzone z poleceń i wyjść;
+  linia stanu rozdziela wykonanie (ostatnie zdarzenie, w tym session_ended)
+  od weryfikacji; zakładki „Kod AI” i „Wyniki sprawdzeń” tylko gdy mają treść;
+  przyciski decyzji tylko przy przygotowanej poprawce i oznaczone jako
+  demonstracja do Etapu 6. Opis: docs/local-preview.md.
+  Skill prowadzący (Etap 5, .claude/skills/devguide/SKILL.md) każe agentowi
+  zapisywać obserwacje, podejrzenia, objaśnienia poprawek i sprawdzenia przez
+  CLI w trakcie pracy i zmieniać pliki tylko przez Write/Edit; kontekst przy
+  starcie sesji powtarza zasady; eksperyment ma trzecią sesję z naturalnym
+  zadaniem i dziesiąte pytanie o samodzielny zapis ustaleń. Punkt kontroli
+  (Etap 6) jeszcze nie istnieje: przyciski decyzji w podglądzie są demonstracją.
+  Nie zakładaj, że cokolwiek działa, dopóki nie zostało zaimplementowane
+  i sprawdzone w tym repo.
 
   Stack (docs/stack.md): Node.js 24 + TypeScript uruchamiany natywnie bez
   budowania, testy w node:test (*.test.ts obok kodu), jeden package.json.

@@ -57,6 +57,13 @@ export interface SessionResumedEvent extends EventEnvelope {
   source: string;
 }
 
+export interface SessionEndedEvent extends EventEnvelope {
+  kind: "session_ended";
+  origin: "devguide";
+  /** `reason` of the SessionEnd hook: `other`, `clear`, `logout`, ... */
+  reason: string;
+}
+
 export interface ObservationEvent extends EventEnvelope {
   kind: "observation";
   origin: "agent";
@@ -93,6 +100,24 @@ export interface ChangePreparedEvent extends EventEnvelope {
   text: string;
   patch: string | null;
   materials: Material[];
+}
+
+/**
+ * The agent's explanation of one logical fix: what it is for, how it works,
+ * what it assumes. Tied at recording time to the `file_changed` events it
+ * covers; an empty `change_ids` means no recorded change matched.
+ */
+export interface ChangeExplainedEvent extends EventEnvelope {
+  kind: "change_explained";
+  origin: "agent";
+  title: string;
+  purpose: string;
+  mechanism: string;
+  /** Assumptions and limits in plain language; empty when none were given. */
+  assumptions: string;
+  materials: Material[];
+  /** Ids of the `file_changed` events this explanation covers. */
+  change_ids: string[];
 }
 
 export interface FileChangedEvent extends EventEnvelope {
@@ -157,6 +182,8 @@ export interface CheckEvent extends EventEnvelope {
   status: CheckStatus;
   execution_id: string | null;
   reason: CheckReason | null;
+  /** Limits of the check as stated by the agent; null when none were given (also for events recorded before the field existed). */
+  limits: string | null;
 }
 
 export interface AgentMessageEvent extends EventEnvelope {
@@ -169,11 +196,13 @@ export type TaskEvent =
   | TaskStartedEvent
   | UserPromptEvent
   | SessionResumedEvent
+  | SessionEndedEvent
   | ObservationEvent
   | HypothesisEvent
   | HypothesisResolvedEvent
   | ProposalEvent
   | ChangePreparedEvent
+  | ChangeExplainedEvent
   | FileChangedEvent
   | CommandRunEvent
   | ToolFailedEvent
@@ -190,6 +219,7 @@ export const AGENT_KINDS = [
   "hypothesis_resolved",
   "proposal",
   "change_prepared",
+  "change_explained",
   "decision",
   "check",
 ] as const;
@@ -200,6 +230,7 @@ export const ALL_KINDS: readonly EventKind[] = [
   "task_started",
   "user_prompt",
   "session_resumed",
+  "session_ended",
   ...AGENT_KINDS,
   "file_changed",
   "command_run",
@@ -211,11 +242,13 @@ export const ORIGIN_OF_KIND: Record<EventKind, Origin> = {
   task_started: "user",
   user_prompt: "user",
   session_resumed: "devguide",
+  session_ended: "devguide",
   observation: "agent",
   hypothesis: "agent",
   hypothesis_resolved: "agent",
   proposal: "agent",
   change_prepared: "agent",
+  change_explained: "agent",
   file_changed: "tool",
   command_run: "tool",
   tool_failed: "tool",
@@ -232,11 +265,13 @@ const REQUIRED_TEXT: Record<EventKind, readonly string[]> = {
   task_started: ["description"],
   user_prompt: ["text"],
   session_resumed: ["source"],
+  session_ended: ["reason"],
   observation: ["text"],
   hypothesis: ["text"],
   hypothesis_resolved: ["hypothesis_id", "outcome", "text"],
   proposal: ["text"],
   change_prepared: ["text"],
+  change_explained: ["title", "purpose", "mechanism"],
   file_changed: ["path", "tool"],
   command_run: ["command"],
   tool_failed: ["tool"],
@@ -279,6 +314,9 @@ export function validateDraft(kind: string, draft: Draft): string[] {
   }
   if (draft["materials"] !== undefined && !isMaterialArray(draft["materials"])) {
     problems.push(`"materials" must be a list of { label, content }`);
+  }
+  if (draft["change_ids"] !== undefined && !isStringArray(draft["change_ids"])) {
+    problems.push(`"change_ids" must be a list of event ids`);
   }
   return problems;
 }
